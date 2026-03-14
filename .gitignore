@@ -1,3 +1,4 @@
 test.ipynb
 .venv/*
 .vscode/*
+data/processed/*
