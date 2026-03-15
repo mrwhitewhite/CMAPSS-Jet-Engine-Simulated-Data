@@ -11,7 +11,7 @@ Output:
 
 Usage:
     python predict.py                  # runs the built-in smoke test
-    python predict.py --csv path/to/engine.csv --unit unit-to-be-tested
+    python predict.py path/to/engine.csv unit-to-be-tested
 """
 
 import argparse
