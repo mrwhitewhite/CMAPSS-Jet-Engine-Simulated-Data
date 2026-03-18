@@ -3,11 +3,28 @@ example API client using test_FD001.txt
 
 Reads the test file, calls the RUL prediction API for a chosen unit, and prints the result.
 
-Usage
------
-python test_api.py                                          # predict unit 1 (default)
-python test_api.py --unit 3                             # predict a different unit
-python test_api.py --unit 3 --trajectory         # full cycle-by-cycle trajectory
+# Basic usage
+> python test_api.py "data\raw\test_FD002.txt" --unit 1
+Loaded test_FD002.txt — unit 1, 258 cycles
+
+Prediction for unit 1 for test_FD002.txt:
+  Cycles observed : 258
+  Predicted RUL   : 16.54 cycles
+  RUL cap         : 125 cycles
+
+# Trajectory prediction (predict one by one)
+> python test_api.py "data\raw\test_FD002.txt" --unit 1 --trajectory
+Trajectory for unit 1 (258 cycles):
+   cycle  predicted_rul
+  ──────  ─────────────
+       1         117.52
+       2         125.00
+       3         122.87
+       4         116.44
+       5         125.00
+       ...
+       257          16.61
+       258          16.54
 """
 
 import argparse
@@ -54,7 +71,7 @@ def predict_trajectory(host: str, df: pd.DataFrame, unit: int) -> dict:
 # main
 def main():
     parser = argparse.ArgumentParser(description="RUL prediction API client.")
-    parser.add_argument("--file", type=str, help="Path to test data file")
+    parser.add_argument("file", type=str, help="Path to test data file")
     parser.add_argument(
         "--unit", type=int, default=DEFAULT_UNIT, help="Engine unit to predict"
     )
@@ -78,7 +95,7 @@ def main():
         sys.exit(1)
 
     cycles = df[df["unit"] == args.unit]["cycle"].max()
-    print(f"Loaded {path.name} — unit {args.unit}, {cycles} cycles")
+    print(f"Loaded {path.name}: unit {args.unit}, {cycles} cycles")
 
     # call API
     if args.trajectory:
@@ -92,7 +109,7 @@ def main():
             print(f"  {point['cycle']:>6}  {point['predicted_rul']:>13.2f}")
     else:
         result = predict(args.host, df, args.unit)
-        print(f"\nPrediction for unit {result['unit']}:")
+        print(f"\nPrediction for unit {result['unit']} for {path.name}:")
         print(f"  Cycles observed : {result['cycles_observed']}")
         print(f"  Predicted RUL   : {result['predicted_rul']} cycles")
         print(f"  RUL cap         : {result['rul_cap']} cycles")
