@@ -18,31 +18,24 @@ if uploaded_file:
     st.sidebar.title("功能菜单")
 
 # Create sidebar navigation 
-    if st.sidebar.button("🏠 首页"):
-        st.session_state.page = "home"
+    if st.sidebar.button("Overview Dashboard"):
+        st.session_state.page = "Overview Dashboard"
     
-    if st.sidebar.button("📊 数据看板"):
-        st.session_state.page = "dashboard"
+    if st.sidebar.button("Sensor & RUL Analysis"):
+        st.session_state.page = "Sensor & RUL Analysis"
     
-    if st.sidebar.button("📈 图表分析"):
-        st.session_state.page = "charts"
+    if st.sidebar.button("Condition Charts"):
+        st.session_state.page = "Condition Charts"
     
-    if st.sidebar.button("⚙️ 设置"):
-        st.session_state.page = "settings"
+    if st.sidebar.button("xx"):
+        st.session_state.page = "xx"
 
 # Initial page state
     if 'page' not in st.session_state:
         st.session_state.page = "home"
 
 
-    if st.session_state.page == "home":
-        st.title("Overview")
-    elif st.session_state.page == "dashboard":
-        st.title("Conditions")
-    elif st.session_state.page == "charts":
-        st.title("xx")
-    elif st.session_state.page == "settings":
-        st.title("yy")
+
     
     
     # Sidebar filters
@@ -58,53 +51,25 @@ if uploaded_file:
     # Filter engine
     engine_df = df[(df["unit"] == selected_engine) & (df["fd"] == selected_fd)]
 
+def dataset_overview():
     # ======================
     # Dataset Overview
     # ======================
 
-    st.header(" Dataset Overview")
+    st.subheader("RUL Distribution")
 
-    col1, col2, col3, col4 = st.columns(4)
-
-    col1.metric("Total Engines", df["unit"].nunique())
-    col2.metric("Total Engines", df["fd"].nunique())
-
-    col3.metric("Total Cycles", df["cycle"].max())
-    col4.metric("Total Sensors", len(sensor_columns))
-
-    st.dataframe(df.head())
-
-    # ======================
-    # RUL Trend
-    # ======================
-
-    st.header(" RUL Degradation Trend")
-
-    fig_rul = px.line(
-        engine_df,
-        x=selected_sensor,
-        y="rul",
-        title=f"Engine {selected_engine} Remaining Useful Life"
+    fig = px.histogram(
+        df,
+        x="rul",
+        nbins=30,
+        title="Distribution of Remaining Useful Life (RUL)"
     )
+    
+    st.plotly_chart(fig, use_container_width=True)
     
     
 
-    st.plotly_chart(fig_rul, use_container_width=True)
 
-    # ======================
-    # Sensor Monitoring
-    # ======================
-
-    st.header("🔧 Sensor Health Monitoring")
-
-    fig_sensor = px.line(
-        engine_df,
-        x="cycle",
-        y=selected_sensor,
-        title=f"{selected_sensor} Trend"
-    )
-
-    st.plotly_chart(fig_sensor, use_container_width=True)
 
     # ======================
     # Rolling Mean Comparison
@@ -142,6 +107,61 @@ if uploaded_file:
 
     st.plotly_chart(fig_engine, use_container_width=True)
 
-else:
 
-    st.info("Upload your dataset to start the dashboard.")
+def sensor_rul():
+    st.header(" Dataset Overview")
+
+    
+    col1, col2, col3, col4 = st.columns(4)
+
+    col1.metric("Total Engines", df["unit"].nunique())
+    col2.metric("Total Engines", df["fd"].nunique())
+
+    col3.metric("Total Cycles", df["cycle"].max())
+    col4.metric("Total Sensors", len(sensor_columns))
+
+    st.dataframe(df.head())
+
+    # ======================
+    # RUL Trend
+    # ======================
+
+    st.header(" RUL Degradation Trend")
+
+    fig_rul = px.line(
+        engine_df,
+        x="rul",
+        y=selected_sensor,
+        title=f"Engine {selected_engine} Remaining Useful Life"
+    )
+    
+    
+
+    st.plotly_chart(fig_rul, use_container_width=True)
+
+    # ======================
+    # Sensor Monitoring
+    # ======================
+
+    st.header("🔧 Sensor Health Monitoring")
+
+    fig_sensor = px.line(
+        engine_df,
+        x="cycle",
+        y=selected_sensor,
+        title=f"{selected_sensor} Trend"
+    )
+
+    st.plotly_chart(fig_sensor, use_container_width=True)
+    
+
+if st.session_state.page == "Overview Dashboard":
+        st.title("Overview")
+        dataset_overview()
+elif st.session_state.page == "Sensor & RUL Analysis":
+        st.title("Conditions")
+        sensor_rul()
+elif st.session_state.page == "Condition Charts":
+        st.title("Condition Charts")
+elif st.session_state.page == "xx":
+        st.title("yy")
