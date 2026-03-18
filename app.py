@@ -4,27 +4,59 @@ import plotly.express as px
 
 st.set_page_config(page_title="RUL Engine Dashboard", layout="wide")
 
-st.title("✈️ Aircraft Engine Remaining Useful Life Dashboard")
+st.title("Aircraft Engine Remaining Useful Life Dashboard")
 
 # Upload data
 # uploaded_file = st.sidebar.file_uploader("Upload Dataset", type=["csv"])
-uploaded_file = "D:\\CMAPSS-Jet-Engine-Simulated-Data\\data\\processed\\processed\\train.csv"
+uploaded_file = r"D:\CMAPSS-Jet-Engine-Simulated-Data\data\processed\train.csv"
 
 if uploaded_file:
 
     df = pd.read_csv(uploaded_file)
 
     st.sidebar.success("Dataset Loaded")
+    st.sidebar.title("功能菜单")
 
+# Create sidebar navigation 
+    if st.sidebar.button("🏠 首页"):
+        st.session_state.page = "home"
+    
+    if st.sidebar.button("📊 数据看板"):
+        st.session_state.page = "dashboard"
+    
+    if st.sidebar.button("📈 图表分析"):
+        st.session_state.page = "charts"
+    
+    if st.sidebar.button("⚙️ 设置"):
+        st.session_state.page = "settings"
+
+# Initial page state
+    if 'page' not in st.session_state:
+        st.session_state.page = "home"
+
+
+    if st.session_state.page == "home":
+        st.title("Overview")
+    elif st.session_state.page == "dashboard":
+        st.title("Conditions")
+    elif st.session_state.page == "charts":
+        st.title("xx")
+    elif st.session_state.page == "settings":
+        st.title("yy")
+    
+    
     # Sidebar filters
     engine_list = df["unit"].unique()
     selected_engine = st.sidebar.selectbox("Select Engine Unit", engine_list)
+
+    fd_list = df["fd"].unique()
+    selected_fd = st.sidebar.selectbox("Select FD", fd_list)
 
     sensor_columns = [col for col in df.columns if col.startswith("s")]
     selected_sensor = st.sidebar.selectbox("Select Sensor", sensor_columns)
 
     # Filter engine
-    engine_df = df[df["unit"] == selected_engine]
+    engine_df = df[(df["unit"] == selected_engine) & (df["fd"] == selected_fd)]
 
     # ======================
     # Dataset Overview
@@ -32,11 +64,13 @@ if uploaded_file:
 
     st.header(" Dataset Overview")
 
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
 
     col1.metric("Total Engines", df["unit"].nunique())
-    col2.metric("Total Cycles", df["cycle"].max())
-    col3.metric("Total Sensors", len(sensor_columns))
+    col2.metric("Total Engines", df["fd"].nunique())
+
+    col3.metric("Total Cycles", df["cycle"].max())
+    col4.metric("Total Sensors", len(sensor_columns))
 
     st.dataframe(df.head())
 
@@ -44,14 +78,16 @@ if uploaded_file:
     # RUL Trend
     # ======================
 
-    st.header("📉 RUL Degradation Trend")
+    st.header(" RUL Degradation Trend")
 
     fig_rul = px.line(
         engine_df,
-        x="cycle",
+        x=selected_sensor,
         y="rul",
         title=f"Engine {selected_engine} Remaining Useful Life"
     )
+    
+    
 
     st.plotly_chart(fig_rul, use_container_width=True)
 
