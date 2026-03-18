@@ -8,10 +8,9 @@ st.title("Aircraft Engine Remaining Useful Life Dashboard")
 
 # Upload data
 # uploaded_file = st.sidebar.file_uploader("Upload Dataset", type=["csv"])
-uploaded_file = r"D:\CMAPSS-Jet-Engine-Simulated-Data\data\processed\train.csv"
+uploaded_file = r"data\processed\train.csv"
 
 if uploaded_file:
-
     df = pd.read_csv(uploaded_file)
 
     st.sidebar.success("Dataset Loaded")
@@ -30,8 +29,8 @@ if uploaded_file:
     if st.sidebar.button("xx"):
         st.session_state.page = "xx"
 
-# Initial page state
-    if 'page' not in st.session_state:
+    # Initial page state
+    if "page" not in st.session_state:
         st.session_state.page = "home"
 
 
@@ -78,14 +77,13 @@ def dataset_overview():
     rm_col = f"{selected_sensor}_rm5"
 
     if rm_col in engine_df.columns:
-
         st.header("📈 Sensor Trend with Rolling Mean")
 
         fig_rm = px.line(
             engine_df,
             x="cycle",
             y=[selected_sensor, rm_col],
-            title="Sensor vs Rolling Mean"
+            title="Sensor vs Rolling Mean",
         )
 
         st.plotly_chart(fig_rm, use_container_width=True)
@@ -99,10 +97,7 @@ def dataset_overview():
     final_rul = df.groupby("unit")["rul"].min().reset_index()
 
     fig_engine = px.bar(
-        final_rul,
-        x="unit",
-        y="rul",
-        title="Final RUL Distribution Across Engines"
+        final_rul, x="unit", y="rul", title="Final RUL Distribution Across Engines"
     )
 
     st.plotly_chart(fig_engine, use_container_width=True)
