@@ -261,7 +261,7 @@ def predict_trajectory_endpoint(request: PredictRequest):
         unit=request.unit,
         cycles_observed=len(df),
         trajectory=[
-            TrajectoryPoint(cycle=int(cycle), predicted_rul=float(rul))
+            TrajectoryPoint(cycle=int(cycle), predicted_rul=float(rul))  # type: ignore
             for cycle, rul in traj.items()
         ],
     )
