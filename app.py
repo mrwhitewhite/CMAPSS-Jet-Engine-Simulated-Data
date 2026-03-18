@@ -1,166 +1,892 @@
 """
-predict.py — RUL deployment script
+dashboard.py — Streamlit dashboard for CMAPSS turbofan engine health monitoring
 
-Input:
-    A DataFrame of raw sensor readings for engines, one row per cycle.
-    Required columns: unit, cycle, os1, os2, os3, s1…s21
-    Rows must be in chronological order (ascending cycle).
+Sections
+--------
+Fleet Overview    — cycle distribution, predicted RUL bar chart, fleet health summary
+Engine Deep-Dive  — sensor trajectories, RUL trajectory from API, operating conditions
+Sensor Explorer   — last-cycle fleet heatmap, correlation matrix, violin distributions
 
-Output:
-    Predicted RUL (cycles) at the last observed cycle.
-
-Usage:
-    python predict.py                  # runs the built-in smoke test
-    python predict.py path/to/engine.csv unit-to-be-tested
+Run
+---
+streamlit run dashboard.py
 """
 
+import io
+import time
 
-import argparse
-import json
-import warnings
-import joblib
 import numpy as np
 import pandas as pd
-import xgboost as xgb
-from pyprojroot import here
+import plotly.express as px
+import plotly.graph_objects as go
+import joblib
+import requests
+import streamlit as st
+from pathlib import Path
 
-warnings.filterwarnings("ignore")
-MODELS_DIR = here() / "models"
+
+st.set_page_config(
+    page_title="Turbofan Engine Health",
+    page_icon="✈️",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
 COLS = ["unit", "cycle", "os1", "os2", "os3"] + [f"s{i}" for i in range(1, 22)]
+DROP_SENSORS = {"s1", "s5", "s6", "s10", "s16", "s18", "s19"}
+SCOLS = [c for c in COLS if c.startswith("s") and c not in DROP_SENSORS]
+SENSOR_LABELS = {
+    "s2": "T24 — LPC out temp",
+    "s3": "T30 — HPC out temp",
+    "s4": "T50 — LPT out temp",
+    "s7": "P30 — HPC pressure",
+    "s8": "Nf  — fan speed",
+    "s9": "Nc  — core speed",
+    "s11": "Ps30 — static pressure",
+    "s12": "phi  — fuel/Ps30",
+    "s13": "NRf  — corr fan speed",
+    "s14": "NRc  — corr core speed",
+    "s15": "BPR  — bypass ratio",
+    "s17": "htBleed",
+    "s20": "W31  — HPT coolant bleed",
+    "s21": "W32  — LPT coolant bleed",
+}
+RUL_CAP = 125
 
-# INIT
-_model = xgb.XGBRegressor()
-_model.load_model(MODELS_DIR / "model.ubj")
+try:
+    from pyprojroot import here
 
-_km = joblib.load(MODELS_DIR / "condition_clusterer.joblib")
-_rs = pd.read_parquet(MODELS_DIR / "normalisation_stats.parquet")
+    MODELS_DIR = here() / "models"
+except Exception:
+    MODELS_DIR = Path(__file__).parent / "models"
 
-with open(MODELS_DIR / "pipeline_config.json") as _f:
-    _cfg = json.load(_f)
 
-    st.sidebar.success("Dataset Loaded")
-    st.sidebar.title("功能菜单")
+@st.cache_data
+def load_data(content: bytes) -> pd.DataFrame:
+    df = pd.read_csv(io.BytesIO(content), sep=r"\s+", header=None).dropna(axis=1)
+    df.columns = COLS
+    return df
 
-# Create sidebar navigation 
-    if st.sidebar.button("Overview Dashboard"):
-        st.session_state.page = "Overview Dashboard"
+
+def rul_color(rul: float) -> str:
+    if rul <= 30:
+        return "#e15759"
+    if rul <= 70:
+        return "#f28e2b"
+    return "#59a14f"
+
+
+def call_predict(host: str, df: pd.DataFrame, unit: int) -> float | None:
+    try:
+        resp = requests.post(
+            f"{host}/predict",
+            json={"unit": unit, "readings": df.to_dict(orient="records")},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        return resp.json()["predicted_rul"]
+    except Exception:
+        return None
+
+
+def call_trajectory(host: str, df: pd.DataFrame, unit: int) -> list[dict] | None:
+    try:
+        resp = requests.post(
+            f"{host}/predict/trajectory",
+            json={"unit": unit, "readings": df.to_dict(orient="records")},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        return resp.json()["trajectory"]
+    except Exception:
+        return None
+
+
+def base_layout() -> dict:
+    return dict(
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        margin=dict(t=10, b=40, l=10, r=10),
+        font=dict(size=12),
+    )
+
+
+@st.cache_resource
+def load_artefacts():
+    """Load KMeans and normalisation stats once; None if models/ not found."""
+    try:
+        km = joblib.load(MODELS_DIR / "condition_clusterer.joblib")
+        rs = pd.read_parquet(MODELS_DIR / "normalisation_stats.parquet")
+        with open(MODELS_DIR / "pipeline_config.json") as f:
+            import json
+
+            cfg = json.load(f)
+        return km, rs, cfg["SCOLS"]
+    except Exception:
+        return None, None, None
+
+
+def compute_ood(df_unit: pd.DataFrame, km, rs, scols: list) -> pd.DataFrame:
+    """
+    For each cycle compute:
+      - assigned condition label
+      - distance to nearest centroid  (OS-space OOD proxy)
+      - per-sensor z-score vs training normalisation stats
+    """
+    import warnings
+
+    df = df_unit.copy()
+    os_arr = df[["os1", "os2", "os3"]].to_numpy()
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        df["condition"] = km.predict(os_arr)
+
+    # distance to nearest centroid
+    dists = np.linalg.norm(os_arr[:, None, :] - km.cluster_centers_[None, :, :], axis=2)
+    df["dist_to_centroid"] = dists.min(axis=1)
+    df["nearest_centroid"] = dists.argmin(axis=1)
+
+    # per-sensor z-scores vs training stats
+    for s in scols:
+        mu = df["condition"].map(rs[f"{s}_mean"])
+        sig = df["condition"].map(rs[f"{s}_std"]).replace(0, 1e-6)
+        df[f"{s}_z"] = (df[s].values - mu.values) / sig.values
+
+    return df
+
+if 'df_all' not in st.session_state:
+    st.session_state.df_all = None
+if 'selected_unit' not in st.session_state:
+    st.session_state.selected_unit = None
+if 'units' not in st.session_state:
+    st.session_state.units = []
+if 'api_host' not in st.session_state:
+    st.session_state.api_host = "http://localhost:8000"
     
-    if st.sidebar.button("Sensor & RUL Analysis"):
-        st.session_state.page = "Sensor & RUL Analysis"
     
-    if st.sidebar.button("Condition Charts"):
-        st.session_state.page = "Condition Charts"
-    
-    if st.sidebar.button("xx"):
-        st.session_state.page = "xx"
+# ── sidebar ───────────────────────────────────────────────────────────────────
+with st.sidebar:
+    st.title("✈️ Engine Health")
+    st.divider()
 
-    # Initial page state
+   
+    
+    # st.divider()
+    # section = st.radio(
+    #     "Section",
+    #     ["Fleet Overview", "Engine Deep-Dive", "Condition Analysis", "Sensor Explorer"],
+    #     label_visibility="collapsed",
+    # )
+    if st.sidebar.button("Getting Started"):
+        st.session_state.page = "Getting Started"
+        section = st.session_state.page
+        
     if "page" not in st.session_state:
-        st.session_state.page = "home"
+        st.session_state.page = "Getting Started" 
+    
+    if st.sidebar.button("Overview"):
+        st.session_state.page = "Fleet Overview"
+    if st.sidebar.button("⚙️Sensor Explorer"):
+        st.session_state.page = "Sensor Explorer"
+    
 
-
-
+    if st.sidebar.button("📈Condition Analysis"):
+        st.session_state.page = "Condition Analysis"
+    if st.sidebar.button("Predictive Deep-Dive"):
+        st.session_state.page = "Engine Deep-Dive"
+    
+    section = st.session_state.page
     
     
-    # Sidebar filters
-    engine_list = df["unit"].unique()
-    selected_engine = st.sidebar.selectbox("Select Engine Unit", engine_list)
 
-    fd_list = df["fd"].unique()
-    selected_fd = st.sidebar.selectbox("Select FD", fd_list)
+# main,middle= st.columns([4,1])  # 右边窄一点
 
-    sensor_columns = [col for col in df.columns if col.startswith("s")]
-    selected_sensor = st.sidebar.selectbox("Select Sensor", sensor_columns)
+# with main:    
+#     st.header("Getting Started")
+#     st.markdown("## ✈️ Turbofan Engine Health Dashboard")
+#     st.markdown(
+#         "Upload a CMAPSS test file (e.g. `test_FD001.txt`) from the sidebar to get started. "
+#         "The file should be space-separated with 26 columns per the CMAPSS format."
+#     )
+#     st.info(
+#         "**API host** — point to your running FastAPI server "
+#         "(default `http://localhost:8000`). Predictions are fetched on demand."
+#     )
+#     uploaded = st.file_uploader("Upload test data (.txt)", type=["txt"])
+#     api_host = st.text_input("API host", value="http://localhost:8000")
 
-    # Filter engine
-    engine_df = df[(df["unit"] == selected_engine) & (df["fd"] == selected_fd)]
 
-def dataset_overview():
-    # ======================
-    # Dataset Overview
-    # ======================
+#     if uploaded:
+#         df_all = load_data(uploaded.read())
+#         units = sorted(df_all["unit"].unique().tolist())
+#         selected_unit = st.selectbox("Engine unit", units, index=0)
+#     else:
+#         df_all = None
+#         selected_unit = None
 
 
-    fig = px.histogram(
-        df,
-        x="rul",
-        nbins=30,
-        title="Distribution of Remaining Useful Life (RUL)"
+
+# # ── no data state ─────────────────────────────────────────────────────────────
+# if df_all is None:
+#     # st.markdown("## ✈️ Turbofan Engine Health Dashboard")
+#     # st.markdown(
+#     #     "Upload a CMAPSS test file (e.g. `test_FD001.txt`) from the sidebar to get started. "
+#     #     "The file should be space-separated with 26 columns per the CMAPSS format."
+#     # )
+#     # st.info(
+#     #     "**API host** — point to your running FastAPI server "
+#     #     "(default `http://localhost:8000`). Predictions are fetched on demand."
+#     # )
+#     # st.stop()
+#     section = "Fleet Overview"
+#     st.stop()
+
+
+
+
+
+if section == "Getting Started":
+    st.header("Getting Started")
+    st.markdown("## ✈️ Turbofan Engine Health Dashboard")
+    st.markdown(
+        "Upload a CMAPSS test file (e.g. `test_FD001.txt`) from the sidebar to get started. "
+        "The file should be space-separated with 26 columns per the CMAPSS format."
     )
+    st.info(
+        "**API host** — point to your running FastAPI server "
+        "(default `http://localhost:8000`). Predictions are fetched on demand."
+    )
+    uploaded = st.file_uploader("Upload test data (.txt)", type=["txt"])
+    st.session_state.uploaded = uploaded
+    api_host = st.text_input("API host", value="http://localhost:8000")
+    st.session_state.api_host = api_host
+
+    if uploaded:
+        df_all = load_data(uploaded.read())
+        units = sorted(df_all["unit"].unique().tolist())
+        selected_unit = st.selectbox("Engine unit", units, index=0)
+        st.session_state.df_all = df_all
+        st.session_state.units = units
+        st.session_state.selected_unit = selected_unit
+    else:
+        df_all = None
+        selected_unit = None
+
     
-    st.plotly_chart(fig, use_container_width=True)
-    
-    
 
+df_all = st.session_state.df_all
+selected_unit = st.session_state.selected_unit
+units = st.session_state.units
+api_host = st.session_state.api_host
+uploaded = st.session_state.uploaded
+# ── no data state ─────────────────────────────────────────────────────────────
+if df_all is None:
+        # st.markdown("## ✈️ Turbofan Engine Health Dashboard")
+        # st.markdown(
+        #     "Upload a CMAPSS test file (e.g. `test_FD001.txt`) from the sidebar to get started. "
+        #     "The file should be space-separated with 26 columns per the CMAPSS format."
+        # )
+        # st.info(
+        #     "**API host** — point to your running FastAPI server "
+        #     "(default `http://localhost:8000`). Predictions are fetched on demand."
+        # )
+        # st.stop()
+        section = "Fleet Overview"
+        st.stop()
+        
+df_unit = (
+        df_all[df_all["unit"] == selected_unit].sort_values("cycle").reset_index(drop=True)
+    )
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 1 — FLEET OVERVIEW
+# ══════════════════════════════════════════════════════════════════════════════
+if section == "Fleet Overview":
+    df_all = st.session_state.df_all
+    selected_unit = st.session_state.selected_unit
+    units = st.session_state.units
+    api_host = st.session_state.api_host
+    uploaded = st.session_state.uploaded
 
-
-    traj = predict_rul_trajectory(engine_df)
-    print(f"[smoke test] Trajectory (last 5 cycles):\n{traj.tail()}")
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Predict RUL from engine sensor history at specific unit."
+    st.header("Fleet Overview")
+    selected_unit = st.selectbox("Engine unit", units, index=0)
+    df_unit = (
+        df_all[df_all["unit"] == selected_unit].sort_values("cycle").reset_index(drop=True)
     )
 
-    st.plotly_chart(fig_engine, use_container_width=True)
+    cycles_per_unit = df_all.groupby("unit")["cycle"].max()
 
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Engines", len(units))
+    c2.metric("Avg cycles observed", f"{cycles_per_unit.mean():.0f}")
+    c3.metric("Max cycles", int(cycles_per_unit.max()))
+    c4.metric("Min cycles", int(cycles_per_unit.min()))
 
-def sensor_rul():
-    st.header(" Dataset Overview")
+    st.divider()
 
+    col_left, col_right = st.columns(2)
+
+    with col_left:
+        st.subheader("Cycle length distribution")
+        cpu = cycles_per_unit.reset_index().rename(columns={"cycle": "max_cycle"})
+        fig = px.histogram(
+            cpu,
+            x="max_cycle",
+            nbins=20,
+            labels={"max_cycle": "Cycles observed"},
+            color_discrete_sequence=["#4e79a7"],
+        )
+        fig.update_layout(yaxis_title="Engines", height=300, **base_layout())
+        st.plotly_chart(fig, use_container_width=True)
+
+    with col_right:
+        st.subheader("Cycles per engine")
+        fig2 = px.bar(
+            cpu.sort_values("unit"),
+            x="unit",
+            y="max_cycle",
+            labels={"unit": "Engine unit", "max_cycle": "Cycles"},
+            color="max_cycle",
+            color_continuous_scale="Blues",
+        )
+        fig2.update_layout(coloraxis_showscale=False, height=300, **base_layout())
+        st.plotly_chart(fig2, use_container_width=True)
+
+    st.divider()
     
-    col1, col2, col3, col4 = st.columns(4)
 
-    col1.metric("Total Engines", df["unit"].nunique())
-    col2.metric("Total Engines", df["fd"].nunique())
 
-    col3.metric("Total Cycles", df["cycle"].max())
-    col4.metric("Total Sensors", len(sensor_columns))
-
-    st.dataframe(df.head())
-
-    # ======================
-    # RUL Trend
-    # ======================
-
-    st.header(" RUL Degradation Trend")
-
-    fig_rul = px.line(
-        engine_df,
-        x="rul",
-        y=selected_sensor,
-        title=f"Engine {selected_engine} Remaining Useful Life"
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 2 — ENGINE DEEP-DIVE
+# ══════════════════════════════════════════════════════════════════════════════
+elif section == "Engine Deep-Dive":
+    selected_unit = st.selectbox("Engine unit", units, index=0)
+    df_unit = (
+        df_all[df_all["unit"] == selected_unit].sort_values("cycle").reset_index(drop=True)
     )
-    
-    
+    st.header(f"Engine Deep-Dive — Unit {selected_unit}")
+    st.subheader("Fleet RUL predictions")
+    st.caption("Calls the API once per engine — may take a moment for large fleets.")
 
-    st.plotly_chart(fig_rul, use_container_width=True)
+    if st.button("▶  Run fleet predictions", type="primary"):
+        results = []
+        bar = st.progress(0, text="Predicting…")
+        for i, u in enumerate(units):
+            rul = call_predict(api_host, df_all, u)
+            results.append({"unit": u, "predicted_rul": rul if rul is not None else -1})
+            bar.progress((i + 1) / len(units), text=f"Unit {u} ({i + 1}/{len(units)})")
+            time.sleep(0.01)
+        bar.empty()
+        st.session_state["fleet_rul"] = pd.DataFrame(results)
 
-    # ======================
-    # Sensor Monitoring
-    # ======================
+    rul_df = st.session_state.get("fleet_rul")
+    if rul_df is not None:
+        rul_df = rul_df.copy()
+        rul_df["color"] = rul_df["predicted_rul"].apply(
+            lambda v: rul_color(v) if v >= 0 else "#aaaaaa"
+        )
+        fig3 = go.Figure(
+            go.Bar(
+                x=rul_df["unit"],
+                y=rul_df["predicted_rul"].clip(lower=0),
+                marker_color=rul_df["color"],
+                hovertemplate="Unit %{x}<br>Predicted RUL: %{y:.1f} cycles<extra></extra>",
+            )
+        )
+        fig3.add_hline(
+            y=30,
+            line_dash="dash",
+            line_color="#e15759",
+            annotation_text="Critical (30)",
+            annotation_position="right",
+        )
+        fig3.add_hline(
+            y=70,
+            line_dash="dot",
+            line_color="#f28e2b",
+            annotation_text="Warning (70)",
+            annotation_position="right",
+        )
+        fig3.update_layout(
+            xaxis_title="Engine unit",
+            yaxis_title="Predicted RUL (cycles)",
+            height=380,
+            **base_layout(),
+        )
+        st.plotly_chart(fig3, use_container_width=True)
 
-    st.header("🔧 Sensor Health Monitoring")
+        valid = rul_df[rul_df["predicted_rul"] >= 0]["predicted_rul"]
+        if len(valid):
+            n_h = int((valid > 70).sum())
+            n_w = int(((valid > 30) & (valid <= 70)).sum())
+            n_c = int((valid <= 30).sum())
+            gc1, gc2, gc3 = st.columns(3)
+            gc1.metric("🟢 Healthy", n_h, f"{n_h / len(valid) * 100:.0f}% of fleet")
+            gc2.metric("🟡 Warning", n_w, f"{n_w / len(valid) * 100:.0f}% of fleet")
+            gc3.metric("🔴 Critical", n_c, f"{n_c / len(valid) * 100:.0f}% of fleet")
+    else:
+        st.info("Click **Run fleet predictions** to call the API for all engines.")
+    st.divider()
+    st.subheader("RUL trajectory from API")
+    if st.button("▶  Fetch RUL trajectory", type="primary"):
+        with st.spinner("Calling /predict/trajectory…"):
+            traj = call_trajectory(api_host, df_all, selected_unit)
+        if traj is None:
+            st.error("API call failed — is the server running at the configured host?")
+        else:
+            st.session_state[f"traj_{selected_unit}"] = pd.DataFrame(traj)
 
-    fig_sensor = px.line(
-        engine_df,
+    traj_df = st.session_state.get(f"traj_{selected_unit}")
+    if traj_df is not None:
+        fig_t = go.Figure()
+        fig_t.add_trace(
+            go.Scatter(
+                x=traj_df["cycle"],
+                y=traj_df["predicted_rul"],
+                mode="lines",
+                name="Predicted RUL",
+                line=dict(color="#4e79a7", width=2.2),
+                fill="tozeroy",
+                fillcolor="rgba(78,121,167,0.10)",
+            )
+        )
+        fig_t.add_hline(
+            y=30,
+            line_dash="dash",
+            line_color="#e15759",
+            annotation_text="Critical",
+            annotation_position="right",
+        )
+        fig_t.add_hline(
+            y=70,
+            line_dash="dot",
+            line_color="#f28e2b",
+            annotation_text="Warning",
+            annotation_position="right",
+        )
+        fig_t.update_layout(
+            xaxis_title="Cycle",
+            yaxis_title="Predicted RUL (cycles)",
+            yaxis=dict(range=[0, RUL_CAP + 5]),
+            height=340,
+            **base_layout(),
+        )
+        st.plotly_chart(fig_t, use_container_width=True)
+
+        last_rul = traj_df["predicted_rul"].iloc[-1]
+        st.metric(
+            "Predicted RUL at last observed cycle",
+            f"{last_rul:.1f} cycles",
+            delta="⚠ Schedule maintenance" if last_rul <= 70 else "✓ Within safe range",
+            delta_color="inverse" if last_rul <= 70 else "off",
+        )
+    else:
+        st.info("Click **Fetch RUL trajectory** to call the API.")
+
+    st.divider()
+
+    st.subheader("Operating conditions")
+    oc1, oc2, oc3 = st.columns(3)
+    for col, os_col, label in [
+        (oc1, "os1", "Altitude (os1)"),
+        (oc2, "os2", "Mach number (os2)"),
+        (oc3, "os3", "TRA (os3)"),
+    ]:
+        fig_oc = px.scatter(
+            df_unit,
+            x="cycle",
+            y=os_col,
+            labels={"cycle": "Cycle", os_col: label},
+            color_discrete_sequence=["#76b7b2"],
+            opacity=0.55,
+        )
+        fig_oc.update_traces(marker_size=4)
+        fig_oc.update_layout(
+            height=200, title=dict(text=label, font_size=12), **base_layout()
+        )
+        col.plotly_chart(fig_oc, use_container_width=True)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 3 — SENSOR EXPLORER
+# ══════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 3 — CONDITION ANALYSIS (OOD)
+# ══════════════════════════════════════════════════════════════════════════════
+elif section == "Condition Analysis":
+    selected_unit = st.selectbox("Engine unit", units, index=0)
+    df_unit = (
+        df_all[df_all["unit"] == selected_unit].sort_values("cycle").reset_index(drop=True)
+    )
+
+    st.header(f"Condition Analysis — Unit {selected_unit}")
+    st.caption(
+        "Checks whether the engine's operating conditions fall within the "
+        "clusters seen during training (K-means on os1/os2/os3). "
+        "High centroid distance or large sensor z-scores indicate out-of-distribution (OOD) cycles."
+    )
+
+    km, rs, scols = load_artefacts()
+    if km is None:
+        st.warning(
+            "Model artefacts not found. Make sure `models/` contains "
+            "`condition_clusterer.joblib` and `normalisation_stats.parquet`."
+        )
+        st.stop()
+
+    ood_df = compute_ood(df_unit, km, rs, scols)
+
+    # OOD threshold: 99th percentile of all distances in the uploaded file
+    all_os = df_all[["os1", "os2", "os3"]].to_numpy()
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        all_dists = np.linalg.norm(
+            all_os[:, None, :] - km.cluster_centers_[None, :, :], axis=2
+        ).min(axis=1)
+    ood_thresh = float(np.percentile(all_dists, 99))
+    ood_mask = ood_df["dist_to_centroid"] > ood_thresh
+    n_ood = int(ood_mask.sum())
+    n_total = len(ood_df)
+    pct_ood = n_ood / n_total * 100
+
+    # ── summary cards ─────────────────────────────────────────────────────────
+    ca1, ca2, ca3, ca4 = st.columns(4)
+    ca1.metric("Cycles analysed", n_total)
+    ca2.metric(
+        "OOD cycles",
+        n_ood,
+        delta=f"{pct_ood:.1f}% of history",
+        delta_color="inverse" if n_ood > 0 else "off",
+    )
+    ca3.metric("Conditions assigned", ood_df["condition"].nunique())
+    ca4.metric("OOD threshold (dist)", f"{ood_thresh:.5f}")
+
+    st.divider()
+
+    # ── distance to centroid over time ─────────────────────────────────────────
+    st.subheader("Distance to nearest training centroid over time")
+    st.caption(
+        "Spikes above the red threshold line indicate cycles outside the training OS space."
+    )
+
+    fig_dist = go.Figure()
+    fig_dist.add_trace(
+        go.Scatter(
+            x=ood_df["cycle"],
+            y=ood_df["dist_to_centroid"],
+            mode="lines",
+            name="Centroid distance",
+            line=dict(color="#4e79a7", width=1.5),
+        )
+    )
+    if n_ood > 0:
+        fig_dist.add_trace(
+            go.Scatter(
+                x=ood_df.loc[ood_mask, "cycle"],
+                y=ood_df.loc[ood_mask, "dist_to_centroid"],
+                mode="markers",
+                name="OOD cycle",
+                marker=dict(color="#e15759", size=7, symbol="x"),
+            )
+        )
+    fig_dist.add_hline(
+        y=ood_thresh,
+        line_dash="dash",
+        line_color="#e15759",
+        annotation_text=f"OOD threshold ({ood_thresh:.5f})",
+        annotation_position="top right",
+    )
+    fig_dist.update_layout(
+        xaxis_title="Cycle",
+        yaxis_title="Distance to centroid",
+        height=280,
+        legend=dict(orientation="h", y=1.12),
+        **base_layout(),
+    )
+    st.plotly_chart(fig_dist, use_container_width=True)
+
+    st.divider()
+
+    # ── 3D OS scatter — engine vs centroids ────────────────────────────────────
+    st.subheader("Operating condition space (os1 / os2 / os3)")
+    st.caption(
+        "Engine cycles plotted against training centroids. OOD cycles shown in red."
+    )
+
+    centroids_df = (
+        pd.DataFrame(km.cluster_centers_, columns=["os1", "os2", "os3"])
+        .reset_index()
+        .rename(columns={"index": "condition"})
+    )
+    centroids_df["label"] = "Centroid " + centroids_df["condition"].astype(str)
+
+    fig_3d = go.Figure()
+
+    # normal cycles
+    normal = ood_df[~ood_mask]
+    fig_3d.add_trace(
+        go.Scatter3d(
+            x=normal["os1"],
+            y=normal["os2"],
+            z=normal["os3"],
+            mode="markers",
+            marker=dict(size=3, color="#4e79a7", opacity=0.6),
+            name="Normal cycles",
+        )
+    )
+
+    # OOD cycles
+    if n_ood > 0:
+        ood_pts = ood_df[ood_mask]
+        fig_3d.add_trace(
+            go.Scatter3d(
+                x=ood_pts["os1"],
+                y=ood_pts["os2"],
+                z=ood_pts["os3"],
+                mode="markers",
+                marker=dict(size=6, color="#e15759", symbol="x", opacity=0.9),
+                name="OOD cycles",
+            )
+        )
+
+    # training centroids
+    fig_3d.add_trace(
+        go.Scatter3d(
+            x=centroids_df["os1"],
+            y=centroids_df["os2"],
+            z=centroids_df["os3"],
+            mode="markers+text",
+            marker=dict(size=10, color="#f28e2b", symbol="diamond", opacity=1),
+            text=centroids_df["label"],
+            textposition="top center",
+            name="Training centroids",
+        )
+    )
+
+    fig_3d.update_layout(
+        scene=dict(
+            xaxis_title="os1 (altitude)",
+            yaxis_title="os2 (Mach)",
+            zaxis_title="os3 (TRA)",
+        ),
+        height=500,
+        margin=dict(t=10, b=10, l=10, r=10),
+        legend=dict(orientation="h", y=-0.05),
+    )
+    st.plotly_chart(fig_3d, use_container_width=True)
+
+    st.divider()
+
+    # ── sensor z-score heatmap ─────────────────────────────────────────────────
+    st.subheader("Sensor z-scores vs training normalisation stats")
+    st.caption(
+        "Z-score measures how many standard deviations each sensor reading "
+        "deviates from its training condition mean. |z| > 3 is flagged as anomalous."
+    )
+
+    z_cols = [f"{s}_z" for s in scols]
+    z_matrix = ood_df[["cycle"] + z_cols].set_index("cycle")
+    z_matrix.columns = [s.replace("_z", "") for s in z_matrix.columns]
+
+    # clip for colour scale readability
+    z_clipped = z_matrix.clip(-4, 4).T
+
+    fig_z = px.imshow(
+        z_clipped,
+        color_continuous_scale="RdBu_r",
+        zmin=-4,
+        zmax=4,
+        labels={"x": "Cycle", "y": "Sensor", "color": "Z-score"},
+        aspect="auto",
+    )
+    fig_z.update_layout(
+        height=380,
+        coloraxis_colorbar=dict(title="z", thickness=14),
+        **base_layout(),
+    )
+    st.plotly_chart(fig_z, use_container_width=True)
+
+    # highlight sensors with the highest max abs z-score
+    max_z = z_matrix.abs().max().sort_values(ascending=False)
+    anomalous = max_z[max_z > 3]
+    if not anomalous.empty:
+        st.warning(
+            f"**Sensors with |z| > 3 in at least one cycle:** "
+            + ", ".join([f"`{s}` ({v:.2f})" for s, v in anomalous.items()])
+        )
+    else:
+        st.success(
+            "No sensor z-scores exceed ±3 — all readings within expected training range."
+        )
+
+    st.divider()
+
+    # ── condition label timeline ───────────────────────────────────────────────
+    st.subheader("Condition label over time")
+    st.caption("Shows which of the 6 training conditions each cycle was assigned to.")
+
+    fig_cond = px.scatter(
+        ood_df,
         x="cycle",
-        y=selected_sensor,
-        title=f"{selected_sensor} Trend"
+        y="condition",
+        color=ood_mask.map({True: "OOD", False: "Normal"}),
+        color_discrete_map={"Normal": "#4e79a7", "OOD": "#e15759"},
+        labels={"cycle": "Cycle", "condition": "Condition label"},
+        category_orders={"color": ["Normal", "OOD"]},
+        opacity=0.7,
     )
-    args = parser.parse_args()
+    fig_cond.update_traces(marker_size=7)
+    fig_cond.update_layout(
+        yaxis=dict(tickmode="linear", tick0=0, dtick=1),
+        height=250,
+        legend_title="",
+        legend=dict(orientation="h", y=1.15),
+        **base_layout(),
+    )
+    st.plotly_chart(fig_cond, use_container_width=True)
 
-    st.plotly_chart(fig_sensor, use_container_width=True)
-    
 
-if st.session_state.page == "Overview Dashboard":
-        st.title("Overview")
-        dataset_overview()
-elif st.session_state.page == "Sensor & RUL Analysis":
-        st.title("Conditions")
-        sensor_rul()
-elif st.session_state.page == "Condition Charts":
-        st.title("Condition Charts")
-elif st.session_state.page == "xx":
-        st.title("yy")
+elif section == "Sensor Explorer":
+    st.header("Sensor Explorer")
+    selected_unit = st.selectbox("Engine unit", units, index=0)
+    df_unit = (
+        df_all[df_all["unit"] == selected_unit].sort_values("cycle").reset_index(drop=True)
+    )
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Cycles observed", len(df_unit))
+    m2.metric("Last cycle", int(df_unit["cycle"].iloc[-1]))
+    m3.metric(
+        "T24 (last cycle)",
+        f"{df_unit['s2'].iloc[-1]:.2f} °R",
+        help="Total temperature at LPC outlet",
+    )
+    m4.metric(
+        "Ps30 (last cycle)",
+        f"{df_unit['s11'].iloc[-1]:.2f} psia",
+        help="Static pressure at HPC outlet",
+    )
+
+    st.divider()
+
+    g1, g2, g3 = st.columns(3)
+    with g1:
+        st.subheader("Sensor trajectories")
+        selected_sensors = st.multiselect(
+            "Sensors to display",
+            options=SCOLS,
+            default=["s2", "s4", "s11", "s14"],
+            format_func=lambda s: f"{s} — {SENSOR_LABELS.get(s, s)}",
+        )
+        if selected_sensors:
+            fig_s = go.Figure()
+            for s in selected_sensors:
+                fig_s.add_trace(
+                    go.Scatter(
+                        x=df_unit["cycle"],
+                        y=df_unit[s],
+                        mode="lines",
+                        name=SENSOR_LABELS.get(s, s),
+                        line=dict(width=1.8),
+                    )
+                )
+            fig_s.update_layout(
+                xaxis_title="Cycle",
+                yaxis_title="Raw sensor value",
+                legend=dict(orientation="h", yanchor="bottom", y=1.02),
+                height=360,
+                **base_layout(),
+            )
+            st.plotly_chart(fig_s, use_container_width=True)
+        else:
+            st.info("Select at least one sensor above.")
+
+    st.divider()
+
+    last_cycles = (
+        df_all.sort_values("cycle")
+        .groupby("unit")
+        .last()
+        .reset_index()[["unit"] + SCOLS]
+    )
+
+    st.subheader("Last-cycle sensor value across all engines")
+    heatmap_sensor = st.selectbox(
+        "Sensor",
+        SCOLS,
+        format_func=lambda s: f"{s} — {SENSOR_LABELS.get(s, s)}",
+        index=SCOLS.index("s11"),
+    )
+    col_vals = last_cycles[heatmap_sensor]
+    norm_vals = (col_vals - col_vals.min()) / (col_vals.max() - col_vals.min() + 1e-9)
+    fig_h = go.Figure(
+        go.Bar(
+            x=last_cycles["unit"],
+            y=last_cycles[heatmap_sensor],
+            marker=dict(
+                color=norm_vals,
+                colorscale="RdYlGn_r",
+                showscale=True,
+                colorbar=dict(title="Norm.", thickness=12),
+            ),
+            hovertemplate="Unit %{x}<br>%{y:.4f}<extra></extra>",
+        )
+    )
+    fig_h.update_layout(
+        xaxis_title="Engine unit",
+        yaxis_title=SENSOR_LABELS.get(heatmap_sensor, heatmap_sensor),
+        height=320,
+        **base_layout(),
+    )
+    st.plotly_chart(fig_h, use_container_width=True)
+
+    st.divider()
+
+    st.subheader("Sensor correlation matrix (last observed cycle, all engines)")
+    corr = last_cycles[SCOLS].rename(columns=SENSOR_LABELS).corr()
+    fig_c = px.imshow(
+        corr,
+        text_auto=".2f",
+        aspect="auto",
+        color_continuous_scale="RdBu_r",
+        zmin=-1,
+        zmax=1,
+    )
+    fig_c.update_layout(
+        height=520,
+        coloraxis_colorbar=dict(title="r", thickness=12),
+        **base_layout(),
+    )
+    st.plotly_chart(fig_c, use_container_width=True)
+
+    st.divider()
+
+    st.subheader("Sensor distribution across all cycles")
+    dist_sensor = st.selectbox(
+        "Sensor",
+        SCOLS,
+        format_func=lambda s: f"{s} — {SENSOR_LABELS.get(s, s)}",
+        index=SCOLS.index("s4"),
+        key="dist_sensor",
+    )
+    unit_filter = st.multiselect(
+        "Filter to specific units (empty = all)",
+        options=units,
+        default=[],
+    )
+    plot_df = df_all if not unit_filter else df_all[df_all["unit"].isin(unit_filter)]
+    fig_d = px.violin(
+        plot_df,
+        x="unit",
+        y=dist_sensor,
+        box=True,
+        points=False,
+        labels={
+            "unit": "Engine unit",
+            dist_sensor: SENSOR_LABELS.get(dist_sensor, dist_sensor),
+        },
+        color_discrete_sequence=["#4e79a7"],
+    )
+    fig_d.update_layout(height=380, **base_layout())
+    st.plotly_chart(fig_d, use_container_width=True)
