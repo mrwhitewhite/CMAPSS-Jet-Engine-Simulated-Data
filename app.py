@@ -1,17 +1,42 @@
-import streamlit as st
+"""
+predict.py — RUL deployment script
+
+Input:
+    A DataFrame of raw sensor readings for engines, one row per cycle.
+    Required columns: unit, cycle, os1, os2, os3, s1…s21
+    Rows must be in chronological order (ascending cycle).
+
+Output:
+    Predicted RUL (cycles) at the last observed cycle.
+
+Usage:
+    python predict.py                  # runs the built-in smoke test
+    python predict.py path/to/engine.csv unit-to-be-tested
+"""
+
+
+import argparse
+import json
+import warnings
+import joblib
+import numpy as np
 import pandas as pd
-import plotly.express as px
+import xgboost as xgb
+from pyprojroot import here
 
-st.set_page_config(page_title="RUL Engine Dashboard", layout="wide")
+warnings.filterwarnings("ignore")
+MODELS_DIR = here() / "models"
+COLS = ["unit", "cycle", "os1", "os2", "os3"] + [f"s{i}" for i in range(1, 22)]
 
-st.title("Aircraft Engine Remaining Useful Life Dashboard")
+# INIT
+_model = xgb.XGBRegressor()
+_model.load_model(MODELS_DIR / "model.ubj")
 
-# Upload data
-# uploaded_file = st.sidebar.file_uploader("Upload Dataset", type=["csv"])
-uploaded_file = r"data\processed\train.csv"
+_km = joblib.load(MODELS_DIR / "condition_clusterer.joblib")
+_rs = pd.read_parquet(MODELS_DIR / "normalisation_stats.parquet")
 
-if uploaded_file:
-    df = pd.read_csv(uploaded_file)
+with open(MODELS_DIR / "pipeline_config.json") as _f:
+    _cfg = json.load(_f)
 
     st.sidebar.success("Dataset Loaded")
     st.sidebar.title("功能菜单")
@@ -55,7 +80,6 @@ def dataset_overview():
     # Dataset Overview
     # ======================
 
-    st.subheader("RUL Distribution")
 
     fig = px.histogram(
         df,
@@ -70,34 +94,13 @@ def dataset_overview():
 
 
 
-    # ======================
-    # Rolling Mean Comparison
-    # ======================
+    traj = predict_rul_trajectory(engine_df)
+    print(f"[smoke test] Trajectory (last 5 cycles):\n{traj.tail()}")
 
-    rm_col = f"{selected_sensor}_rm5"
 
-    if rm_col in engine_df.columns:
-        st.header("📈 Sensor Trend with Rolling Mean")
-
-        fig_rm = px.line(
-            engine_df,
-            x="cycle",
-            y=[selected_sensor, rm_col],
-            title="Sensor vs Rolling Mean",
-        )
-
-        st.plotly_chart(fig_rm, use_container_width=True)
-
-    # ======================
-    # Engine Comparison
-    # ======================
-
-    st.header("⚙️ Engine Comparison")
-
-    final_rul = df.groupby("unit")["rul"].min().reset_index()
-
-    fig_engine = px.bar(
-        final_rul, x="unit", y="rul", title="Final RUL Distribution Across Engines"
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="Predict RUL from engine sensor history at specific unit."
     )
 
     st.plotly_chart(fig_engine, use_container_width=True)
@@ -146,6 +149,7 @@ def sensor_rul():
         y=selected_sensor,
         title=f"{selected_sensor} Trend"
     )
+    args = parser.parse_args()
 
     st.plotly_chart(fig_sensor, use_container_width=True)
     
