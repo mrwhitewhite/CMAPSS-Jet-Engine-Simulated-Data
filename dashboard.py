@@ -15,11 +15,14 @@ streamlit run dashboard.py
 import io
 import time
 
+import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import joblib
 import requests
 import streamlit as st
+from pathlib import Path
 
 st.set_page_config(
     page_title="Turbofan Engine Health",
@@ -48,6 +51,13 @@ SENSOR_LABELS = {
     "s21": "W32  — LPT coolant bleed",
 }
 RUL_CAP = 125
+
+try:
+    from pyprojroot import here
+
+    MODELS_DIR = here() / "models"
+except Exception:
+    MODELS_DIR = Path(__file__).parent / "models"
 
 
 @st.cache_data
@@ -100,6 +110,51 @@ def base_layout() -> dict:
     )
 
 
+@st.cache_resource
+def load_artefacts():
+    """Load KMeans and normalisation stats once; None if models/ not found."""
+    try:
+        km = joblib.load(MODELS_DIR / "condition_clusterer.joblib")
+        rs = pd.read_parquet(MODELS_DIR / "normalisation_stats.parquet")
+        with open(MODELS_DIR / "pipeline_config.json") as f:
+            import json
+
+            cfg = json.load(f)
+        return km, rs, cfg["SCOLS"]
+    except Exception:
+        return None, None, None
+
+
+def compute_ood(df_unit: pd.DataFrame, km, rs, scols: list) -> pd.DataFrame:
+    """
+    For each cycle compute:
+      - assigned condition label
+      - distance to nearest centroid  (OS-space OOD proxy)
+      - per-sensor z-score vs training normalisation stats
+    """
+    import warnings
+
+    df = df_unit.copy()
+    os_arr = df[["os1", "os2", "os3"]].to_numpy()
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        df["condition"] = km.predict(os_arr)
+
+    # distance to nearest centroid
+    dists = np.linalg.norm(os_arr[:, None, :] - km.cluster_centers_[None, :, :], axis=2)
+    df["dist_to_centroid"] = dists.min(axis=1)
+    df["nearest_centroid"] = dists.argmin(axis=1)
+
+    # per-sensor z-scores vs training stats
+    for s in scols:
+        mu = df["condition"].map(rs[f"{s}_mean"])
+        sig = df["condition"].map(rs[f"{s}_std"]).replace(0, 1e-6)
+        df[f"{s}_z"] = (df[s].values - mu.values) / sig.values
+
+    return df
+
+
 # ── sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.title("✈️ Engine Health")
@@ -121,7 +176,7 @@ with st.sidebar:
     st.divider()
     section = st.radio(
         "Section",
-        ["Fleet Overview", "Engine Deep-Dive", "Sensor Explorer"],
+        ["Fleet Overview", "Engine Deep-Dive", "Condition Analysis", "Sensor Explorer"],
         label_visibility="collapsed",
     )
 
@@ -152,8 +207,7 @@ if section == "Fleet Overview":
     cycles_per_unit = df_all.groupby("unit")["cycle"].max()
 
     c1, c2, c3, c4 = st.columns(4)
-
-    c1.metric("Engines", len(units))  # type: ignore
+    c1.metric("Engines", len(units))
     c2.metric("Avg cycles observed", f"{cycles_per_unit.mean():.0f}")
     c3.metric("Max cycles", int(cycles_per_unit.max()))
     c4.metric("Min cycles", int(cycles_per_unit.min()))
@@ -195,10 +249,10 @@ if section == "Fleet Overview":
     if st.button("▶  Run fleet predictions", type="primary"):
         results = []
         bar = st.progress(0, text="Predicting…")
-        for i, u in enumerate(units):  # type: ignore
+        for i, u in enumerate(units):
             rul = call_predict(api_host, df_all, u)
             results.append({"unit": u, "predicted_rul": rul if rul is not None else -1})
-            bar.progress((i + 1) / len(units), text=f"Unit {u} ({i + 1}/{len(units)})")  # type: ignore
+            bar.progress((i + 1) / len(units), text=f"Unit {u} ({i + 1}/{len(units)})")
             time.sleep(0.01)
         bar.empty()
         st.session_state["fleet_rul"] = pd.DataFrame(results)
@@ -309,7 +363,7 @@ elif section == "Engine Deep-Dive":
     st.subheader("RUL trajectory from API")
     if st.button("▶  Fetch RUL trajectory", type="primary"):
         with st.spinner("Calling /predict/trajectory…"):
-            traj = call_trajectory(api_host, df_all, selected_unit)  # type: ignore
+            traj = call_trajectory(api_host, df_all, selected_unit)
         if traj is None:
             st.error("API call failed — is the server running at the configured host?")
         else:
@@ -389,6 +443,239 @@ elif section == "Engine Deep-Dive":
 # ══════════════════════════════════════════════════════════════════════════════
 # SECTION 3 — SENSOR EXPLORER
 # ══════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 3 — CONDITION ANALYSIS (OOD)
+# ══════════════════════════════════════════════════════════════════════════════
+elif section == "Condition Analysis":
+    st.header(f"Condition Analysis — Unit {selected_unit}")
+    st.caption(
+        "Checks whether the engine's operating conditions fall within the "
+        "clusters seen during training (K-means on os1/os2/os3). "
+        "High centroid distance or large sensor z-scores indicate out-of-distribution (OOD) cycles."
+    )
+
+    km, rs, scols = load_artefacts()
+    if km is None:
+        st.warning(
+            "Model artefacts not found. Make sure `models/` contains "
+            "`condition_clusterer.joblib` and `normalisation_stats.parquet`."
+        )
+        st.stop()
+
+    ood_df = compute_ood(df_unit, km, rs, scols)
+
+    # OOD threshold: 99th percentile of all distances in the uploaded file
+    all_os = df_all[["os1", "os2", "os3"]].to_numpy()
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        all_dists = np.linalg.norm(
+            all_os[:, None, :] - km.cluster_centers_[None, :, :], axis=2
+        ).min(axis=1)
+    ood_thresh = float(np.percentile(all_dists, 99))
+    ood_mask = ood_df["dist_to_centroid"] > ood_thresh
+    n_ood = int(ood_mask.sum())
+    n_total = len(ood_df)
+    pct_ood = n_ood / n_total * 100
+
+    # ── summary cards ─────────────────────────────────────────────────────────
+    ca1, ca2, ca3, ca4 = st.columns(4)
+    ca1.metric("Cycles analysed", n_total)
+    ca2.metric(
+        "OOD cycles",
+        n_ood,
+        delta=f"{pct_ood:.1f}% of history",
+        delta_color="inverse" if n_ood > 0 else "off",
+    )
+    ca3.metric("Conditions assigned", ood_df["condition"].nunique())
+    ca4.metric("OOD threshold (dist)", f"{ood_thresh:.5f}")
+
+    st.divider()
+
+    # ── distance to centroid over time ─────────────────────────────────────────
+    st.subheader("Distance to nearest training centroid over time")
+    st.caption(
+        "Spikes above the red threshold line indicate cycles outside the training OS space."
+    )
+
+    fig_dist = go.Figure()
+    fig_dist.add_trace(
+        go.Scatter(
+            x=ood_df["cycle"],
+            y=ood_df["dist_to_centroid"],
+            mode="lines",
+            name="Centroid distance",
+            line=dict(color="#4e79a7", width=1.5),
+        )
+    )
+    if n_ood > 0:
+        fig_dist.add_trace(
+            go.Scatter(
+                x=ood_df.loc[ood_mask, "cycle"],
+                y=ood_df.loc[ood_mask, "dist_to_centroid"],
+                mode="markers",
+                name="OOD cycle",
+                marker=dict(color="#e15759", size=7, symbol="x"),
+            )
+        )
+    fig_dist.add_hline(
+        y=ood_thresh,
+        line_dash="dash",
+        line_color="#e15759",
+        annotation_text=f"OOD threshold ({ood_thresh:.5f})",
+        annotation_position="top right",
+    )
+    fig_dist.update_layout(
+        xaxis_title="Cycle",
+        yaxis_title="Distance to centroid",
+        height=280,
+        legend=dict(orientation="h", y=1.12),
+        **base_layout(),
+    )
+    st.plotly_chart(fig_dist, use_container_width=True)
+
+    st.divider()
+
+    # ── 3D OS scatter — engine vs centroids ────────────────────────────────────
+    st.subheader("Operating condition space (os1 / os2 / os3)")
+    st.caption(
+        "Engine cycles plotted against training centroids. OOD cycles shown in red."
+    )
+
+    centroids_df = (
+        pd.DataFrame(km.cluster_centers_, columns=["os1", "os2", "os3"])
+        .reset_index()
+        .rename(columns={"index": "condition"})
+    )
+    centroids_df["label"] = "Centroid " + centroids_df["condition"].astype(str)
+
+    fig_3d = go.Figure()
+
+    # normal cycles
+    normal = ood_df[~ood_mask]
+    fig_3d.add_trace(
+        go.Scatter3d(
+            x=normal["os1"],
+            y=normal["os2"],
+            z=normal["os3"],
+            mode="markers",
+            marker=dict(size=3, color="#4e79a7", opacity=0.6),
+            name="Normal cycles",
+        )
+    )
+
+    # OOD cycles
+    if n_ood > 0:
+        ood_pts = ood_df[ood_mask]
+        fig_3d.add_trace(
+            go.Scatter3d(
+                x=ood_pts["os1"],
+                y=ood_pts["os2"],
+                z=ood_pts["os3"],
+                mode="markers",
+                marker=dict(size=6, color="#e15759", symbol="x", opacity=0.9),
+                name="OOD cycles",
+            )
+        )
+
+    # training centroids
+    fig_3d.add_trace(
+        go.Scatter3d(
+            x=centroids_df["os1"],
+            y=centroids_df["os2"],
+            z=centroids_df["os3"],
+            mode="markers+text",
+            marker=dict(size=10, color="#f28e2b", symbol="diamond", opacity=1),
+            text=centroids_df["label"],
+            textposition="top center",
+            name="Training centroids",
+        )
+    )
+
+    fig_3d.update_layout(
+        scene=dict(
+            xaxis_title="os1 (altitude)",
+            yaxis_title="os2 (Mach)",
+            zaxis_title="os3 (TRA)",
+        ),
+        height=500,
+        margin=dict(t=10, b=10, l=10, r=10),
+        legend=dict(orientation="h", y=-0.05),
+    )
+    st.plotly_chart(fig_3d, use_container_width=True)
+
+    st.divider()
+
+    # ── sensor z-score heatmap ─────────────────────────────────────────────────
+    st.subheader("Sensor z-scores vs training normalisation stats")
+    st.caption(
+        "Z-score measures how many standard deviations each sensor reading "
+        "deviates from its training condition mean. |z| > 3 is flagged as anomalous."
+    )
+
+    z_cols = [f"{s}_z" for s in scols]
+    z_matrix = ood_df[["cycle"] + z_cols].set_index("cycle")
+    z_matrix.columns = [s.replace("_z", "") for s in z_matrix.columns]
+
+    # clip for colour scale readability
+    z_clipped = z_matrix.clip(-4, 4).T
+
+    fig_z = px.imshow(
+        z_clipped,
+        color_continuous_scale="RdBu_r",
+        zmin=-4,
+        zmax=4,
+        labels={"x": "Cycle", "y": "Sensor", "color": "Z-score"},
+        aspect="auto",
+    )
+    fig_z.update_layout(
+        height=380,
+        coloraxis_colorbar=dict(title="z", thickness=14),
+        **base_layout(),
+    )
+    st.plotly_chart(fig_z, use_container_width=True)
+
+    # highlight sensors with the highest max abs z-score
+    max_z = z_matrix.abs().max().sort_values(ascending=False)
+    anomalous = max_z[max_z > 3]
+    if not anomalous.empty:
+        st.warning(
+            f"**Sensors with |z| > 3 in at least one cycle:** "
+            + ", ".join([f"`{s}` ({v:.2f})" for s, v in anomalous.items()])
+        )
+    else:
+        st.success(
+            "No sensor z-scores exceed ±3 — all readings within expected training range."
+        )
+
+    st.divider()
+
+    # ── condition label timeline ───────────────────────────────────────────────
+    st.subheader("Condition label over time")
+    st.caption("Shows which of the 6 training conditions each cycle was assigned to.")
+
+    fig_cond = px.scatter(
+        ood_df,
+        x="cycle",
+        y="condition",
+        color=ood_mask.map({True: "OOD", False: "Normal"}),
+        color_discrete_map={"Normal": "#4e79a7", "OOD": "#e15759"},
+        labels={"cycle": "Cycle", "condition": "Condition label"},
+        category_orders={"color": ["Normal", "OOD"]},
+        opacity=0.7,
+    )
+    fig_cond.update_traces(marker_size=7)
+    fig_cond.update_layout(
+        yaxis=dict(tickmode="linear", tick0=0, dtick=1),
+        height=250,
+        legend_title="",
+        legend=dict(orientation="h", y=1.15),
+        **base_layout(),
+    )
+    st.plotly_chart(fig_cond, use_container_width=True)
+
+
 elif section == "Sensor Explorer":
     st.header("Sensor Explorer")
 
@@ -435,7 +722,7 @@ elif section == "Sensor Explorer":
     corr = last_cycles[SCOLS].rename(columns=SENSOR_LABELS).corr()
     fig_c = px.imshow(
         corr,
-        text_auto=".2f",  # type: ignore
+        text_auto=".2f",
         aspect="auto",
         color_continuous_scale="RdBu_r",
         zmin=-1,
@@ -460,7 +747,7 @@ elif section == "Sensor Explorer":
     )
     unit_filter = st.multiselect(
         "Filter to specific units (empty = all)",
-        options=units,  # type: ignore
+        options=units,
         default=[],
     )
     plot_df = df_all if not unit_filter else df_all[df_all["unit"].isin(unit_filter)]
