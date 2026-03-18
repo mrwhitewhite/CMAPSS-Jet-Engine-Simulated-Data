@@ -166,38 +166,126 @@ if 'api_host' not in st.session_state:
     
     
 # ── sidebar ───────────────────────────────────────────────────────────────────
-with st.sidebar:
-    st.title("✈️ Engine Health")
-    st.divider()
+# with st.sidebar:
+#     st.title("✈️ Engine Health")
+#     st.divider()
 
    
     
-    # st.divider()
-    # section = st.radio(
-    #     "Section",
-    #     ["Fleet Overview", "Engine Deep-Dive", "Condition Analysis", "Sensor Explorer"],
-    #     label_visibility="collapsed",
-    # )
-    if st.sidebar.button("Getting Started"):
-        st.session_state.page = "Getting Started"
-        section = st.session_state.page
+#     # st.divider()
+#     # section = st.radio(
+#     #     "Section",
+#     #     ["Fleet Overview", "Engine Deep-Dive", "Condition Analysis", "Sensor Explorer"],
+#     #     label_visibility="collapsed",
+#     # )
+#     if st.sidebar.button("Getting Started   "):
+#         st.session_state.page = "Getting Started"
+#         section = st.session_state.page
         
-    if "page" not in st.session_state:
-        st.session_state.page = "Getting Started" 
+#     if "page" not in st.session_state:
+#         st.session_state.page = "Getting Started" 
     
-    if st.sidebar.button("Overview"):
-        st.session_state.page = "Fleet Overview"
-    if st.sidebar.button("⚙️Sensor Explorer"):
-        st.session_state.page = "Sensor Explorer"
+#     if st.sidebar.button("Overview"):
+#         st.session_state.page = "Fleet Overview"
+#     if st.sidebar.button("⚙️Sensor Explorer"):
+#         st.session_state.page = "Sensor Explorer"
     
 
-    if st.sidebar.button("📈Condition Analysis"):
-        st.session_state.page = "Condition Analysis"
-    if st.sidebar.button("Predictive Deep-Dive"):
+#     if st.sidebar.button("📈Condition Analysis"):
+#         st.session_state.page = "Condition Analysis"
+#     if st.sidebar.button("Predictive Deep-Dive"):
+#         st.session_state.page = "Engine Deep-Dive"
+    
+#     section = st.session_state.page
+with st.sidebar:
+    st.title("✈️ Engine Health")
+    st.divider()
+    
+    # 添加自定义CSS使按钮等宽且美观
+    st.markdown("""
+    <style>
+    /* 按钮容器 */
+    div.stButton {
+        width: 100%;
+        margin-bottom: 8px;
+    }
+    # /* 隐藏整个header */
+    # header[data-testid="stHeader"] {
+    #     display: none;
+    # }
+    
+    # /* 调整main内容的上边距，因为header被隐藏了 */
+    # .main .block-container {
+    #     padding-top: 1rem !important;  /* 从默认的6rem减到1rem */
+    #     margin-top: -3rem !important;  /* 负margin让内容更往上 */
+    # }
+    /* 按钮本身 */
+    div.stButton > button {
+        width: 100%;
+        background-color: transparent;
+        border: 1px solid rgba(49, 51, 63, 0.2);
+        border-radius: 8px;
+        padding: 10px 0px;
+        font-weight: 500;
+        transition: all 0.3s ease;
+        text-align: left;
+        padding-left: 15px;
+    }
+    
+    /* 按钮悬停效果 */
+    div.stButton > button:hover {
+        background-color: rgba(78, 121, 167, 0.1);
+        border-color: #4e79a7;
+        transform: translateY(-2px);
+        box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+    }
+    
+    /* 当前页面的按钮高亮 */
+    div.stButton > button:focus {
+        background-color: #4e79a7;
+        color: white;
+        border-color: #4e79a7;
+    }
+    
+    /* 为不同的按钮添加图标颜色 */
+    .stButton button span {
+        margin-right: 8px;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    
+    # 初始化session state
+    if "page" not in st.session_state:
+        st.session_state.page = "Getting Started"
+    
+    # 创建导航按钮 - 使用emoji让按钮更直观
+    if st.button("🚀 Getting Started", use_container_width=True):
+        st.session_state.page = "Getting Started"
+        st.rerun()
+    
+    # 添加一个小间距    
+    if st.button("📊 Fleet Overview", use_container_width=True):
+        st.session_state.page = "Fleet Overview"
+        st.rerun()
+    
+    if st.button("🔍 Predictive Deep-Dive", use_container_width=True):
         st.session_state.page = "Engine Deep-Dive"
+        st.rerun()
     
+    if st.button("📈 Condition Analysis", use_container_width=True):
+        st.session_state.page = "Condition Analysis"
+        st.rerun()
+    
+    if st.button("⚙️ Sensor Explorer", use_container_width=True):
+        st.session_state.page = "Sensor Explorer"
+        st.rerun()
+    
+    # 显示当前页面（可选）
+    st.markdown("---")
+    st.caption(f"Current: **{st.session_state.page}**")
+    
+    # 更新section变量
     section = st.session_state.page
-    
     
 
 # main,middle= st.columns([4,1])  # 右边窄一点
