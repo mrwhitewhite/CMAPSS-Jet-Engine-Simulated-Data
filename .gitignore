@@ -2,3 +2,4 @@ test.ipynb
 .venv/*
 .vscode/*
 data/processed/*
+__pycache__/*
