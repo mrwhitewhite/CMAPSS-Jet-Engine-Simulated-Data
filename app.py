@@ -622,16 +622,74 @@ elif section == "Condition Analysis":
     pct_ood = n_ood / n_total * 100
 
     # ── summary cards ─────────────────────────────────────────────────────────
-    ca1, ca2, ca3, ca4 = st.columns(4)
-    ca1.metric("Cycles analysed", n_total)
-    ca2.metric(
-        "OOD cycles",
-        n_ood,
-        delta=f"{pct_ood:.1f}% of history",
-        delta_color="inverse" if n_ood > 0 else "off",
-    )
-    ca3.metric("Conditions assigned", ood_df["condition"].nunique())
-    ca4.metric("OOD threshold (dist)", f"{ood_thresh:.5f}")
+    st.markdown("""
+    <style>
+    .card {
+        background-color: #111827;
+        padding: 20px;
+        border-radius: 16px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+        text-align: center;
+    }
+    .card-title {
+        font-size: 14px;
+        color: #9CA3AF;
+        margin-bottom: 8px;
+    }
+    .card-value {
+        font-size: 28px;
+        font-weight: 600;
+        color: #F9FAFB;
+    }
+    .card-delta {
+        font-size: 14px;
+        margin-top: 6px;
+    }
+    .positive { color: #10B981; }
+    .negative { color: #EF4444; }
+    </style>
+    """, unsafe_allow_html=True)
+
+
+    # ── Cards Layout ────────────────────────────────────────────────
+    col1, col2, col3, col4 = st.columns(4)
+
+    # Card 1
+    with col1:
+        st.markdown(f"""
+        <div class="card">
+            <div class="card-title">Cycles Analysed</div>
+            <div class="card-value">{n_total}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    # Card 2 (with delta)
+    delta_class = "negative" if n_ood > 0 else "positive"
+    with col2:
+        st.markdown(f"""
+        <div class="card">
+            <div class="card-title">OOD Cycles</div>
+            <div class="card-value">{n_ood}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    # Card 3
+    with col3:
+        st.markdown(f"""
+        <div class="card">
+            <div class="card-title">Conditions Assigned</div>
+            <div class="card-value">{ood_df["condition"].nunique()}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    # Card 4
+    with col4:
+        st.markdown(f"""
+        <div class="card">
+            <div class="card-title">OOD Threshold</div>
+            <div class="card-value">{ood_thresh:.5f}</div>
+        </div>
+        """, unsafe_allow_html=True)
 
     st.divider()
 
