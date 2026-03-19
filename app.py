@@ -26,7 +26,7 @@ from pathlib import Path
 
 
 st.set_page_config(
-    page_title="Turbofan Engine Health",
+    page_title="Jet Engine Health",
     page_icon="✈️",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -249,7 +249,7 @@ with st.sidebar:
 
 if section == "Getting Started":
     st.header("Getting Started")
-    st.markdown("## ✈️ Turbofan Engine Health Dashboard")
+    st.markdown("## ✈️ Jet Engine Health Dashboard")
     st.markdown(
         "Upload a CMAPSS test file (e.g. `test_FD001.txt`) below to get started. "
         "The file should be space-separated with 26 columns per the CMAPSS format."
