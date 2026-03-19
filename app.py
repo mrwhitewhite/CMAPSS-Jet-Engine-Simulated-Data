@@ -49,7 +49,7 @@ SENSOR_LABELS = {
     "s15": "Sensor 15",
     "s17": "Sensor 17",
     "s20": "Sensor 20",
-    "s21": "Sensor 21"
+    "s21": "Sensor 21",
 }
 RUL_CAP = 125
 
@@ -155,36 +155,31 @@ def compute_ood(df_unit: pd.DataFrame, km, rs, scols: list) -> pd.DataFrame:
 
     return df
 
-if 'df_all' not in st.session_state:
+
+if "df_all" not in st.session_state:
     st.session_state.df_all = None
-if 'selected_unit' not in st.session_state:
+if "selected_unit" not in st.session_state:
     st.session_state.selected_unit = None
-if 'units' not in st.session_state:
+if "units" not in st.session_state:
     st.session_state.units = []
-if 'api_host' not in st.session_state:
+if "api_host" not in st.session_state:
     st.session_state.api_host = "http://localhost:8000"
-    
-    
+
+
 # ── sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.title("✈️ Engine Health")
     st.divider()
-    
+
     # 添加自定义CSS使按钮等宽且美观
-    st.markdown("""
+    st.markdown(
+        """
     <style>
     div.stButton {
         width: 100%;
         margin-bottom: 8px;
     }
-    header[data-testid="stHeader"] {
-        display: none;
-    }
-    
-    .block-container {
-        padding-top: 1rem !important;  /* 从默认的6rem减到1rem */
-        margin-top: 0rem !important;  /* 负margin让内容更往上 */
-    }
+
     div.stButton > button {
         width: 100%;
         background-color: transparent;
@@ -214,44 +209,42 @@ with st.sidebar:
         margin-right: 8px;
     }
     </style>
-    """, unsafe_allow_html=True)
-    
+    """,
+        unsafe_allow_html=True,
+    )
+
     # 初始化session state
     if "page" not in st.session_state:
         st.session_state.page = "Getting Started"
-    
+
     # 创建导航按钮 - 使用emoji让按钮更直观
     if st.button("🚀 Getting Started", use_container_width=True):
         st.session_state.page = "Getting Started"
         st.rerun()
-    
-    # 添加一个小间距    
+
+    # 添加一个小间距
     if st.button("📊 Fleet Overview", use_container_width=True):
         st.session_state.page = "Fleet Overview"
         st.rerun()
-    
-    
+
     if st.button("📈 Condition Analysis", use_container_width=True):
         st.session_state.page = "Condition Analysis"
         st.rerun()
-    
+
     if st.button("⚙️ Sensor Explorer", use_container_width=True):
         st.session_state.page = "Sensor Explorer"
         st.rerun()
-    
+
     if st.button("🔍 Predictive Deep-Dive", use_container_width=True):
         st.session_state.page = "Engine Deep-Dive"
         st.rerun()
-    
+
     # 显示当前页面（可选）
     st.markdown("---")
     st.caption(f"Current: **{st.session_state.page}**")
-    
+
     # 更新section变量
     section = st.session_state.page
-    
-
-
 
 
 if section == "Getting Started":
@@ -279,7 +272,6 @@ if section == "Getting Started":
         df_all = None
         selected_unit = None
 
-    
 
 df_all = st.session_state.df_all
 selected_unit = st.session_state.selected_unit
@@ -288,22 +280,22 @@ api_host = st.session_state.api_host
 uploaded = st.session_state.uploaded
 # ── no data state ─────────────────────────────────────────────────────────────
 if df_all is None:
-        # st.markdown("## ✈️ Turbofan Engine Health Dashboard")
-        # st.markdown(
-        #     "Upload a CMAPSS test file (e.g. `test_FD001.txt`) from the sidebar to get started. "
-        #     "The file should be space-separated with 26 columns per the CMAPSS format."
-        # )
-        # st.info(
-        #     "**API host** — point to your running FastAPI server "
-        #     "(default `http://localhost:8000`). Predictions are fetched on demand."
-        # )
-        # st.stop()
-        section = "Fleet Overview"
-        st.stop()
-        
+    # st.markdown("## ✈️ Turbofan Engine Health Dashboard")
+    # st.markdown(
+    #     "Upload a CMAPSS test file (e.g. `test_FD001.txt`) from the sidebar to get started. "
+    #     "The file should be space-separated with 26 columns per the CMAPSS format."
+    # )
+    # st.info(
+    #     "**API host** — point to your running FastAPI server "
+    #     "(default `http://localhost:8000`). Predictions are fetched on demand."
+    # )
+    # st.stop()
+    section = "Fleet Overview"
+    st.stop()
+
 df_unit = (
-        df_all[df_all["unit"] == selected_unit].sort_values("cycle").reset_index(drop=True)
-    )
+    df_all[df_all["unit"] == selected_unit].sort_values("cycle").reset_index(drop=True)
+)
 # ══════════════════════════════════════════════════════════════════════════════
 # SECTION 1 — FLEET OVERVIEW
 # ══════════════════════════════════════════════════════════════════════════════
@@ -315,9 +307,11 @@ if section == "Fleet Overview":
     uploaded = st.session_state.uploaded
 
     st.header("Fleet Overview")
-    selected_unit = st.selectbox("Engine unit", units, index=0)
+    # selected_unit = st.selectbox("Engine unit", units, index=0)
     df_unit = (
-        df_all[df_all["unit"] == selected_unit].sort_values("cycle").reset_index(drop=True)
+        df_all[df_all["unit"] == selected_unit]
+        .sort_values("cycle")
+        .reset_index(drop=True)
     )
 
     cycles_per_unit = df_all.groupby("unit")["cycle"].max()
@@ -359,7 +353,6 @@ if section == "Fleet Overview":
         st.plotly_chart(fig2, use_container_width=True)
 
     st.divider()
-    
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -370,7 +363,9 @@ elif section == "Engine Deep-Dive":
 
     selected_unit = st.selectbox("Engine unit", units, index=0)
     df_unit = (
-        df_all[df_all["unit"] == selected_unit].sort_values("cycle").reset_index(drop=True)
+        df_all[df_all["unit"] == selected_unit]
+        .sort_values("cycle")
+        .reset_index(drop=True)
     )
     st.subheader("Fleet RUL predictions")
     st.caption("Calls the API once per engine — may take a moment for large fleets.")
@@ -492,7 +487,6 @@ elif section == "Engine Deep-Dive":
 
     st.divider()
 
-    
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SECTION 3 — SENSOR EXPLORER
@@ -505,7 +499,9 @@ elif section == "Condition Analysis":
 
     selected_unit = st.selectbox("Engine unit", units, index=0)
     df_unit = (
-        df_all[df_all["unit"] == selected_unit].sort_values("cycle").reset_index(drop=True)
+        df_all[df_all["unit"] == selected_unit]
+        .sort_values("cycle")
+        .reset_index(drop=True)
     )
 
     st.caption(
@@ -540,7 +536,8 @@ elif section == "Condition Analysis":
     pct_ood = n_ood / n_total * 100
 
     # ── summary cards ─────────────────────────────────────────────────────────
-    st.markdown("""
+    st.markdown(
+        """
     <style>
     .card {
         background-color: #111827;
@@ -566,48 +563,61 @@ elif section == "Condition Analysis":
     .positive { color: #10B981; }
     .negative { color: #EF4444; }
     </style>
-    """, unsafe_allow_html=True)
-
+    """,
+        unsafe_allow_html=True,
+    )
 
     # ── Cards Layout ────────────────────────────────────────────────
     col1, col2, col3, col4 = st.columns(4)
 
     # Card 1
     with col1:
-        st.markdown(f"""
+        st.markdown(
+            f"""
         <div class="card">
             <div class="card-title">Cycles Analysed</div>
             <div class="card-value">{n_total}</div>
         </div>
-        """, unsafe_allow_html=True)
+        """,
+            unsafe_allow_html=True,
+        )
 
     # Card 2 (with delta)
     delta_class = "negative" if n_ood > 0 else "positive"
     with col2:
-        st.markdown(f"""
+        st.markdown(
+            f"""
         <div class="card">
             <div class="card-title">OOD Cycles</div>
             <div class="card-value">{n_ood}</div>
         </div>
-        """, unsafe_allow_html=True)
+        """,
+            unsafe_allow_html=True,
+        )
 
     # Card 3
     with col3:
-        st.markdown(f"""
+        st.markdown(
+            f"""
         <div class="card">
             <div class="card-title">Conditions Assigned</div>
             <div class="card-value">{ood_df["condition"].nunique()}</div>
         </div>
-        """, unsafe_allow_html=True)
+        """,
+            unsafe_allow_html=True,
+        )
 
     # Card 4
     with col4:
-        st.markdown(f"""
+        st.markdown(
+            f"""
         <div class="card">
             <div class="card-title">OOD Threshold</div>
             <div class="card-value">{ood_thresh:.5f}</div>
         </div>
-        """, unsafe_allow_html=True)
+        """,
+            unsafe_allow_html=True,
+        )
 
     st.divider()
 
@@ -750,13 +760,13 @@ elif section == "Condition Analysis":
     st.divider()
 
 
-   
-
 elif section == "Sensor Explorer":
     st.header("Sensor Explorer")
     selected_unit = st.selectbox("Engine unit", units, index=0)
     df_unit = (
-        df_all[df_all["unit"] == selected_unit].sort_values("cycle").reset_index(drop=True)
+        df_all[df_all["unit"] == selected_unit]
+        .sort_values("cycle")
+        .reset_index(drop=True)
     )
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Cycles observed", len(df_unit))
@@ -863,5 +873,3 @@ elif section == "Sensor Explorer":
     st.plotly_chart(fig_c, use_container_width=True)
 
     st.divider()
-
-
