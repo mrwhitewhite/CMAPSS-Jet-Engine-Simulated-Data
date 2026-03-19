@@ -738,7 +738,7 @@ elif section == "Condition Analysis":
     st.divider()
 
     # ── 3D OS scatter — engine vs centroids ────────────────────────────────────
-    st.subheader("Operating condition space (os1 / os2 / os3)")
+    st.subheader("Operating condition space")
     st.caption(
         "Engine cycles plotted against training centroids. OOD cycles shown in red."
     )
@@ -795,14 +795,15 @@ elif section == "Condition Analysis":
 
     fig_3d.update_layout(
         scene=dict(
-            xaxis_title="os1 (altitude)",
-            yaxis_title="os2 (Mach)",
-            zaxis_title="os3 (TRA)",
+            xaxis_title="os1",
+            yaxis_title="os2",
+            zaxis_title="os3",
         ),
         height=500,
         margin=dict(t=10, b=10, l=10, r=10),
         legend=dict(orientation="h", y=-0.05),
     )
+
     st.plotly_chart(fig_3d, use_container_width=True)
 
     st.divider()
@@ -828,49 +829,8 @@ elif section == "Condition Analysis":
         )
         col.plotly_chart(fig_oc, use_container_width=True)
 
-    # ── sensor z-score heatmap ─────────────────────────────────────────────────
-    st.subheader("Sensor z-scores vs training normalisation stats")
-    st.caption(
-        "Z-score measures how many standard deviations each sensor reading "
-        "deviates from its training condition mean. |z| > 3 is flagged as anomalous."
-    )
-
-    z_cols = [f"{s}_z" for s in scols]
-    z_matrix = ood_df[["cycle"] + z_cols].set_index("cycle")
-    z_matrix.columns = [s.replace("_z", "") for s in z_matrix.columns]
-
-    # clip for colour scale readability
-    z_clipped = z_matrix.clip(-4, 4).T
-
-    fig_z = px.imshow(
-        z_clipped,
-        color_continuous_scale="RdBu_r",
-        zmin=-4,
-        zmax=4,
-        labels={"x": "Cycle", "y": "Sensor", "color": "Z-score"},
-        aspect="auto",
-    )
-    fig_z.update_layout(
-        height=380,
-        coloraxis_colorbar=dict(title="z", thickness=14),
-        **base_layout(),
-    )
-    st.plotly_chart(fig_z, use_container_width=True)
-
-    # highlight sensors with the highest max abs z-score
-    max_z = z_matrix.abs().max().sort_values(ascending=False)
-    anomalous = max_z[max_z > 3]
-    if not anomalous.empty:
-        st.warning(
-            f"**Sensors with |z| > 3 in at least one cycle:** "
-            + ", ".join([f"`{s}` ({v:.2f})" for s, v in anomalous.items()])
-        )
-    else:
-        st.success(
-            "No sensor z-scores exceed ±3 — all readings within expected training range."
-        )
-
     st.divider()
+
 
    
 
