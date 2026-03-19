@@ -747,9 +747,9 @@ elif section == "Condition Analysis":
     st.subheader("Operating conditions")
     oc1, oc2, oc3 = st.columns(3)
     for col, os_col, label in [
-        (oc1, "os1", "Altitude (os1)"),
-        (oc2, "os2", "Mach number (os2)"),
-        (oc3, "os3", "TRA (os3)"),
+        (oc1, "os1", "OS_1"),
+        (oc2, "os2", "OS_2"),
+        (oc3, "os3", "OS_3"),
     ]:
         fig_oc = px.scatter(
             df_unit,
@@ -775,19 +775,6 @@ elif section == "Sensor Explorer":
         df_all[df_all["unit"] == selected_unit]
         .sort_values("cycle")
         .reset_index(drop=True)
-    )
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Cycles observed", len(df_unit))
-    m2.metric("Last cycle", int(df_unit["cycle"].iloc[-1]))
-    m3.metric(
-        "T24 (last cycle)",
-        f"{df_unit['s2'].iloc[-1]:.2f} °R",
-        help="Total temperature at LPC outlet",
-    )
-    m4.metric(
-        "Ps30 (last cycle)",
-        f"{df_unit['s11'].iloc[-1]:.2f} psia",
-        help="Static pressure at HPC outlet",
     )
 
     st.divider()
