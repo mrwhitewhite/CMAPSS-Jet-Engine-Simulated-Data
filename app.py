@@ -102,13 +102,21 @@ def call_trajectory(host: str, df: pd.DataFrame, unit: int) -> list[dict] | None
         return None
 
 
-def base_layout() -> dict:
-    return dict(
-        plot_bgcolor="rgba(0,0,0,0)",
-        paper_bgcolor="rgba(0,0,0,0)",
-        margin=dict(t=10, b=40, l=10, r=10),
-        font=dict(size=12),
-    )
+def base_layout(alt_mode=False) -> dict:  # type: ignore
+    if alt_mode:
+        return dict(
+            plot_bgcolor="rgba(0,0,0,0)",
+            paper_bgcolor="rgba(0,0,0,0)",
+            margin=dict(t=20, b=40, l=10, r=10),
+            font=dict(size=12),
+        )
+    else:
+        return dict(
+            plot_bgcolor="rgba(0,0,0,0)",
+            paper_bgcolor="rgba(0,0,0,0)",
+            margin=dict(t=10, b=40, l=10, r=10),
+            font=dict(size=12),
+        )
 
 
 @st.cache_resource
@@ -753,7 +761,7 @@ elif section == "Condition Analysis":
         )
         fig_oc.update_traces(marker_size=4)
         fig_oc.update_layout(
-            height=200, title=dict(text=label, font_size=12), **base_layout()
+            height=200, title=dict(text=label, font_size=12), **base_layout(True)
         )
         col.plotly_chart(fig_oc, use_container_width=True)
 
