@@ -36,20 +36,20 @@ COLS = ["unit", "cycle", "os1", "os2", "os3"] + [f"s{i}" for i in range(1, 22)]
 DROP_SENSORS = {"s1", "s5", "s6", "s10", "s16", "s18", "s19"}
 SCOLS = [c for c in COLS if c.startswith("s") and c not in DROP_SENSORS]
 SENSOR_LABELS = {
-    "s2": "T24 — LPC out temp",
-    "s3": "T30 — HPC out temp",
-    "s4": "T50 — LPT out temp",
-    "s7": "P30 — HPC pressure",
-    "s8": "Nf  — fan speed",
-    "s9": "Nc  — core speed",
-    "s11": "Ps30 — static pressure",
-    "s12": "phi  — fuel/Ps30",
-    "s13": "NRf  — corr fan speed",
-    "s14": "NRc  — corr core speed",
-    "s15": "BPR  — bypass ratio",
-    "s17": "htBleed",
-    "s20": "W31  — HPT coolant bleed",
-    "s21": "W32  — LPT coolant bleed",
+    "s2": "Sensor 2",
+    "s3": "Sensor 3",
+    "s4": "Sensor 4",
+    "s7": "Sensor 7",
+    "s8": "Sensor 8",
+    "s9": "Sensor 9",
+    "s11": "Sensor 11",
+    "s12": "Sensor 12",
+    "s13": "Sensor 13",
+    "s14": "Sensor 14",
+    "s15": "Sensor 15",
+    "s17": "Sensor 17",
+    "s20": "Sensor 20",
+    "s21": "Sensor 21"
 }
 RUL_CAP = 125
 
@@ -209,21 +209,21 @@ with st.sidebar:
         width: 100%;
         margin-bottom: 8px;
     }
-    # /* 隐藏整个header */
-    # header[data-testid="stHeader"] {
-    #     display: none;
-    # }
+    /* 隐藏整个header */
+    header[data-testid="stHeader"] {
+        display: none;
+    }
     
-    # /* 调整main内容的上边距，因为header被隐藏了 */
-    # .main .block-container {
-    #     padding-top: 1rem !important;  /* 从默认的6rem减到1rem */
-    #     margin-top: -3rem !important;  /* 负margin让内容更往上 */
-    # }
+    /* 调整main内容的上边距，因为header被隐藏了 */
+    .block-container {
+        padding-top: 1rem !important;  /* 从默认的6rem减到1rem */
+        margin-top: 0rem !important;  /* 负margin让内容更往上 */
+    }
     /* 按钮本身 */
     div.stButton > button {
         width: 100%;
         background-color: transparent;
-        border: 1px solid rgba(49, 51, 63, 0.2);
+        border: 1px solid rgba(255, 255, 255, 0.2);
         border-radius: 8px;
         padding: 10px 0px;
         font-weight: 500;
@@ -448,11 +448,12 @@ if section == "Fleet Overview":
 # SECTION 2 — ENGINE DEEP-DIVE
 # ══════════════════════════════════════════════════════════════════════════════
 elif section == "Engine Deep-Dive":
+    st.header(f"Engine Deep-Dive")
+
     selected_unit = st.selectbox("Engine unit", units, index=0)
     df_unit = (
         df_all[df_all["unit"] == selected_unit].sort_values("cycle").reset_index(drop=True)
     )
-    st.header(f"Engine Deep-Dive — Unit {selected_unit}")
     st.subheader("Fleet RUL predictions")
     st.caption("Calls the API once per engine — may take a moment for large fleets.")
 
@@ -573,27 +574,7 @@ elif section == "Engine Deep-Dive":
 
     st.divider()
 
-    st.subheader("Operating conditions")
-    oc1, oc2, oc3 = st.columns(3)
-    for col, os_col, label in [
-        (oc1, "os1", "Altitude (os1)"),
-        (oc2, "os2", "Mach number (os2)"),
-        (oc3, "os3", "TRA (os3)"),
-    ]:
-        fig_oc = px.scatter(
-            df_unit,
-            x="cycle",
-            y=os_col,
-            labels={"cycle": "Cycle", os_col: label},
-            color_discrete_sequence=["#76b7b2"],
-            opacity=0.55,
-        )
-        fig_oc.update_traces(marker_size=4)
-        fig_oc.update_layout(
-            height=200, title=dict(text=label, font_size=12), **base_layout()
-        )
-        col.plotly_chart(fig_oc, use_container_width=True)
-
+    
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SECTION 3 — SENSOR EXPLORER
@@ -602,12 +583,13 @@ elif section == "Engine Deep-Dive":
 # SECTION 3 — CONDITION ANALYSIS (OOD)
 # ══════════════════════════════════════════════════════════════════════════════
 elif section == "Condition Analysis":
+    st.header(f"Condition Analysis")
+
     selected_unit = st.selectbox("Engine unit", units, index=0)
     df_unit = (
         df_all[df_all["unit"] == selected_unit].sort_values("cycle").reset_index(drop=True)
     )
 
-    st.header(f"Condition Analysis — Unit {selected_unit}")
     st.caption(
         "Checks whether the engine's operating conditions fall within the "
         "clusters seen during training (K-means on os1/os2/os3). "
@@ -767,6 +749,27 @@ elif section == "Condition Analysis":
 
     st.divider()
 
+    st.subheader("Operating conditions")
+    oc1, oc2, oc3 = st.columns(3)
+    for col, os_col, label in [
+        (oc1, "os1", "Altitude (os1)"),
+        (oc2, "os2", "Mach number (os2)"),
+        (oc3, "os3", "TRA (os3)"),
+    ]:
+        fig_oc = px.scatter(
+            df_unit,
+            x="cycle",
+            y=os_col,
+            labels={"cycle": "Cycle", os_col: label},
+            color_discrete_sequence=["#76b7b2"],
+            opacity=0.55,
+        )
+        fig_oc.update_traces(marker_size=4)
+        fig_oc.update_layout(
+            height=200, title=dict(text=label, font_size=12), **base_layout()
+        )
+        col.plotly_chart(fig_oc, use_container_width=True)
+
     # ── sensor z-score heatmap ─────────────────────────────────────────────────
     st.subheader("Sensor z-scores vs training normalisation stats")
     st.caption(
@@ -811,30 +814,7 @@ elif section == "Condition Analysis":
 
     st.divider()
 
-    # ── condition label timeline ───────────────────────────────────────────────
-    st.subheader("Condition label over time")
-    st.caption("Shows which of the 6 training conditions each cycle was assigned to.")
-
-    fig_cond = px.scatter(
-        ood_df,
-        x="cycle",
-        y="condition",
-        color=ood_mask.map({True: "OOD", False: "Normal"}),
-        color_discrete_map={"Normal": "#4e79a7", "OOD": "#e15759"},
-        labels={"cycle": "Cycle", "condition": "Condition label"},
-        category_orders={"color": ["Normal", "OOD"]},
-        opacity=0.7,
-    )
-    fig_cond.update_traces(marker_size=7)
-    fig_cond.update_layout(
-        yaxis=dict(tickmode="linear", tick0=0, dtick=1),
-        height=250,
-        legend_title="",
-        legend=dict(orientation="h", y=1.15),
-        **base_layout(),
-    )
-    st.plotly_chart(fig_cond, use_container_width=True)
-
+   
 
 elif section == "Sensor Explorer":
     st.header("Sensor Explorer")
@@ -858,37 +838,35 @@ elif section == "Sensor Explorer":
 
     st.divider()
 
-    g1, g2, g3 = st.columns(3)
-    with g1:
-        st.subheader("Sensor trajectories")
-        selected_sensors = st.multiselect(
-            "Sensors to display",
-            options=SCOLS,
-            default=["s2", "s4", "s11", "s14"],
-            format_func=lambda s: f"{s} — {SENSOR_LABELS.get(s, s)}",
-        )
-        if selected_sensors:
-            fig_s = go.Figure()
-            for s in selected_sensors:
-                fig_s.add_trace(
-                    go.Scatter(
-                        x=df_unit["cycle"],
-                        y=df_unit[s],
-                        mode="lines",
-                        name=SENSOR_LABELS.get(s, s),
-                        line=dict(width=1.8),
-                    )
+    st.subheader("Sensor trajectories")
+    selected_sensors = st.multiselect(
+        "Sensors to display",
+        options=SCOLS,
+        default=["s2"],
+        format_func=lambda s: f"{s} — {SENSOR_LABELS.get(s, s)}",
+    )
+    if selected_sensors:
+        fig_s = go.Figure()
+        for s in selected_sensors:
+            fig_s.add_trace(
+                go.Scatter(
+                    x=df_unit["cycle"],
+                    y=df_unit[s],
+                    mode="lines",
+                    name=SENSOR_LABELS.get(s, s),
+                    line=dict(width=1.8),
                 )
-            fig_s.update_layout(
-                xaxis_title="Cycle",
-                yaxis_title="Raw sensor value",
-                legend=dict(orientation="h", yanchor="bottom", y=1.02),
-                height=360,
-                **base_layout(),
             )
-            st.plotly_chart(fig_s, use_container_width=True)
-        else:
-            st.info("Select at least one sensor above.")
+        fig_s.update_layout(
+            xaxis_title="Cycle",
+            yaxis_title="Raw sensor value",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02),
+            height=360,
+            **base_layout(),
+        )
+        st.plotly_chart(fig_s, use_container_width=True)
+    else:
+        st.info("Select at least one sensor above.")
 
     st.divider()
 
@@ -950,31 +928,4 @@ elif section == "Sensor Explorer":
 
     st.divider()
 
-    st.subheader("Sensor distribution across all cycles")
-    dist_sensor = st.selectbox(
-        "Sensor",
-        SCOLS,
-        format_func=lambda s: f"{s} — {SENSOR_LABELS.get(s, s)}",
-        index=SCOLS.index("s4"),
-        key="dist_sensor",
-    )
-    unit_filter = st.multiselect(
-        "Filter to specific units (empty = all)",
-        options=units,
-        default=[],
-    )
-    plot_df = df_all if not unit_filter else df_all[df_all["unit"].isin(unit_filter)]
-    fig_d = px.violin(
-        plot_df,
-        x="unit",
-        y=dist_sensor,
-        box=True,
-        points=False,
-        labels={
-            "unit": "Engine unit",
-            dist_sensor: SENSOR_LABELS.get(dist_sensor, dist_sensor),
-        },
-        color_discrete_sequence=["#4e79a7"],
-    )
-    fig_d.update_layout(height=380, **base_layout())
-    st.plotly_chart(fig_d, use_container_width=True)
+
