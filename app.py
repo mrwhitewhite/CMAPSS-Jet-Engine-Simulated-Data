@@ -163,7 +163,7 @@ if "selected_unit" not in st.session_state:
 if "units" not in st.session_state:
     st.session_state.units = []
 if "api_host" not in st.session_state:
-    st.session_state.api_host = "http://localhost:8000"
+    st.session_state.api_host = "https://cmapss-jet-engine-simulated-data.onrender.com/"
 
 
 # ── sidebar ───────────────────────────────────────────────────────────────────
@@ -251,16 +251,16 @@ if section == "Getting Started":
     st.header("Getting Started")
     st.markdown("## ✈️ Turbofan Engine Health Dashboard")
     st.markdown(
-        "Upload a CMAPSS test file (e.g. `test_FD001.txt`) from the sidebar to get started. "
+        "Upload a CMAPSS test file (e.g. `test_FD001.txt`) below to get started. "
         "The file should be space-separated with 26 columns per the CMAPSS format."
     )
-    st.info(
-        "**API host** — point to your running FastAPI server "
-        "(default `http://localhost:8000`). Predictions are fetched on demand."
-    )
+    # st.info(
+    #     "**API host** — point to your running FastAPI server "
+    #     "(default `http://localhost:8000`). Predictions are fetched on demand."
+    # )
     uploaded = st.file_uploader("Upload test data (.txt)", type=["txt"])
     st.session_state.uploaded = uploaded
-    api_host = st.text_input("API host", value="http://localhost:8000")
+    api_host = st.text_input("API host", value=st.session_state.api_host)
     st.session_state.api_host = api_host
 
     if uploaded:
