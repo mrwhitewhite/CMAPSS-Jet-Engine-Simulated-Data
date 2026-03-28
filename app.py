@@ -81,7 +81,7 @@ def call_predict(host: str, df: pd.DataFrame, unit: int) -> float | None:
         resp = requests.post(
             f"{host}/predict",
             json={"unit": unit, "readings": df.to_dict(orient="records")},
-            timeout=10,
+            timeout=300,
         )
         resp.raise_for_status()
         return resp.json()["predicted_rul"]
@@ -94,7 +94,7 @@ def call_trajectory(host: str, df: pd.DataFrame, unit: int) -> list[dict] | None
         resp = requests.post(
             f"{host}/predict/trajectory",
             json={"unit": unit, "readings": df.to_dict(orient="records")},
-            timeout=30,
+            timeout=300,
         )
         resp.raise_for_status()
         return resp.json()["trajectory"]
